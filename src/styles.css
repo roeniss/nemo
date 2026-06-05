@@ -81,6 +81,40 @@ input {
 .side-head button {
   flex: 1;
 }
+.side-tabs {
+  display: flex;
+  border-bottom: 1px solid #e5e5e5;
+}
+.side-tabs .tab {
+  flex: 1;
+  border: none;
+  border-radius: 0;
+  background: #fafafa;
+  color: #888;
+  padding: 6px 0;
+}
+.side-tabs .tab.active {
+  background: #ececec;
+  color: #1a1a1a;
+  font-weight: 600;
+}
+.search {
+  margin: 8px;
+  padding: 6px 8px;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+}
+.restore {
+  border: none;
+  background: transparent;
+  color: #888;
+  padding: 0 4px;
+  font-size: 15px;
+  line-height: 1;
+}
+.restore:hover {
+  color: #2a7;
+}
 .memo-list {
   list-style: none;
   margin: 0;

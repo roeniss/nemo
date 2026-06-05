@@ -22,6 +22,9 @@ export default function App() {
   );
   const [loading, setLoading] = useState(true);
   const [memos, setMemos] = useState<MemoMeta[]>([]);
+  const [trash, setTrash] = useState<MemoMeta[]>([]);
+  const [view, setView] = useState<"memos" | "trash">("memos");
+  const [query, setQuery] = useState("");
   const [currentId, setCurrentId] = useState<number | null>(null);
   const [content, setContent] = useState("");
   const [sidebar, setSidebar] = useState(true);
@@ -109,6 +112,16 @@ export default function App() {
     }
   }
 
+  async function loadTrash() {
+    setTrash((await (await api("/trash")).json()) as MemoMeta[]);
+  }
+
+  async function restoreMemo(id: number) {
+    await api(`/memos/${id}/restore`, { method: "POST" });
+    setTrash((t) => t.filter((x) => x.id !== id));
+    setMemos((await (await api("/memos")).json()) as MemoMeta[]);
+  }
+
   function onEdit(value: string) {
     setContent(value);
     if (currentId == null) return;
@@ -132,13 +145,19 @@ export default function App() {
   // Cmd/Ctrl+S: flush pending debounce and save immediately
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
-      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "s") {
+      if (!(e.metaKey || e.ctrlKey)) return;
+      const k = e.key.toLowerCase();
+      if (k === "s") {
         e.preventDefault();
         if (timer.current) clearTimeout(timer.current);
         if (currentId != null) {
           setSaving(true);
           save(currentId, content);
         }
+      } else if (k === "n") {
+        // new memo — newMemo() flushes the in-progress memo first
+        e.preventDefault();
+        newMemo();
       }
     }
     window.addEventListener("keydown", onKey);
@@ -162,6 +181,10 @@ export default function App() {
   }, []);
 
   const html = useMemo(() => marked.parse(content) as string, [content]);
+  const visibleMemos = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    return q ? memos.filter((m) => m.title.toLowerCase().includes(q)) : memos;
+  }, [memos, query]);
 
   if (!authed) return <Login onLogin={login} />;
 
@@ -175,29 +198,75 @@ export default function App() {
               Logout
             </button>
           </div>
-          <ul className="memo-list">
-            {memos.map((m) => (
-              <li
-                key={m.id}
-                className={m.id === currentId ? "active" : ""}
-                onClick={() => openMemo(m.id)}
-              >
-                <span className="memo-title">{m.title || "Untitled"}</span>
-                <button
-                  className="del"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    deleteMemo(m.id);
-                  }}
-                >
-                  ×
-                </button>
-              </li>
-            ))}
-            {memos.length === 0 && (
-              <li className="empty">{loading ? "Loading…" : "No memos"}</li>
-            )}
-          </ul>
+          <div className="side-tabs">
+            <button
+              className={view === "memos" ? "tab active" : "tab"}
+              onClick={() => setView("memos")}
+            >
+              Memos
+            </button>
+            <button
+              className={view === "trash" ? "tab active" : "tab"}
+              onClick={() => {
+                setView("trash");
+                loadTrash();
+              }}
+            >
+              Trash
+            </button>
+          </div>
+
+          {view === "memos" ? (
+            <>
+              <input
+                className="search"
+                placeholder="Search title…"
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+              />
+              <ul className="memo-list">
+                {visibleMemos.map((m) => (
+                  <li
+                    key={m.id}
+                    className={m.id === currentId ? "active" : ""}
+                    onClick={() => openMemo(m.id)}
+                  >
+                    <span className="memo-title">{m.title || "Untitled"}</span>
+                    <button
+                      className="del"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        deleteMemo(m.id);
+                      }}
+                    >
+                      ×
+                    </button>
+                  </li>
+                ))}
+                {visibleMemos.length === 0 && (
+                  <li className="empty">
+                    {loading ? "Loading…" : query ? "No matches" : "No memos"}
+                  </li>
+                )}
+              </ul>
+            </>
+          ) : (
+            <ul className="memo-list">
+              {trash.map((m) => (
+                <li key={m.id}>
+                  <span className="memo-title">{m.title || "Untitled"}</span>
+                  <button
+                    className="restore"
+                    title="Restore"
+                    onClick={() => restoreMemo(m.id)}
+                  >
+                    ↩
+                  </button>
+                </li>
+              ))}
+              {trash.length === 0 && <li className="empty">Trash is empty</li>}
+            </ul>
+          )}
         </aside>
       )}
 

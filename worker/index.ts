@@ -71,6 +71,20 @@ app.post("/api/memos", async (c) => {
   return c.json(row);
 });
 
+app.get("/api/trash", async (c) => {
+  const { results } = await c.env.DB.prepare(
+    "SELECT id, title, updated_at FROM memos WHERE deleted_at IS NOT NULL ORDER BY deleted_at DESC"
+  ).all();
+  return c.json(results);
+});
+
+app.post("/api/memos/:id/restore", async (c) => {
+  await c.env.DB.prepare("UPDATE memos SET deleted_at = NULL WHERE id = ?")
+    .bind(c.req.param("id"))
+    .run();
+  return c.json({ ok: true });
+});
+
 app.get("/api/memos/:id", async (c) => {
   const row = await c.env.DB.prepare(
     "SELECT * FROM memos WHERE id = ? AND deleted_at IS NULL"

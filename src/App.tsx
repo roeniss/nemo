@@ -382,7 +382,7 @@ export default function App() {
                 className="search"
                 placeholder="Search title…"
                 value={query}
-                onChange={(e) => setQuery(e.target.value)}
+                onChange={(e) => setQuery(e.currentTarget.value)}
               />
               <ul className="memo-list">
                 {visibleMemos.map((m) => (
@@ -457,9 +457,9 @@ export default function App() {
             <textarea
               className="editor"
               value={content}
-              onChange={(e) => onEdit(e.target.value)}
+              onChange={(e) => onEdit(e.currentTarget.value)}
               placeholder="# Title&#10;&#10;Write in markdown…"
-              spellCheck={false}
+              spellcheck={false}
             />
             <div className="preview markdown" dangerouslySetInnerHTML={{ __html: html }} />
           </div>
@@ -481,7 +481,7 @@ function Login({ onLogin }: { onLogin: (u: string, p: string) => Promise<LoginRe
   const [p, setP] = useState("");
   const [msg, setMsg] = useState<string | null>(null);
 
-  async function submit(e: React.FormEvent) {
+  async function submit(e: Event) {
     e.preventDefault();
     const res = await onLogin(u, p);
     if (res.ok) return;
@@ -500,12 +500,12 @@ function Login({ onLogin }: { onLogin: (u: string, p: string) => Promise<LoginRe
     <div className="center">
       <form className="login" onSubmit={submit}>
         <h1>memo</h1>
-        <input placeholder="id" value={u} onChange={(e) => setU(e.target.value)} autoFocus />
+        <input placeholder="id" value={u} onChange={(e) => setU(e.currentTarget.value)} autoFocus />
         <input
           type="password"
           placeholder="password"
           value={p}
-          onChange={(e) => setP(e.target.value)}
+          onChange={(e) => setP(e.currentTarget.value)}
         />
         <button type="submit">Login</button>
         {msg && <p className="err">{msg}</p>}

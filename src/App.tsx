@@ -15,7 +15,12 @@ async function api(path: string, init?: RequestInit) {
 }
 
 export default function App() {
-  const [authed, setAuthed] = useState<boolean | null>(null);
+  // optimistic: render immediately based on last-known auth (httpOnly cookie
+  // can't be read by JS), then reconcile with the background check below.
+  const [authed, setAuthed] = useState<boolean>(
+    () => localStorage.getItem("qm-authed") === "1"
+  );
+  const [loading, setLoading] = useState(true);
   const [memos, setMemos] = useState<MemoMeta[]>([]);
   const [currentId, setCurrentId] = useState<number | null>(null);
   const [content, setContent] = useState("");
@@ -28,13 +33,20 @@ export default function App() {
   const currentIdRef = useRef(currentId);
   currentIdRef.current = currentId;
 
-  // initial auth check + list
+  // background auth check + list — UI is already on screen; this fills it in
   useEffect(() => {
     api("/memos").then(async (r) => {
-      if (r.status === 401) return setAuthed(false);
+      if (r.status === 401) {
+        localStorage.removeItem("qm-authed");
+        setAuthed(false);
+        setLoading(false);
+        return;
+      }
+      localStorage.setItem("qm-authed", "1");
       setAuthed(true);
       const list = (await r.json()) as MemoMeta[];
       setMemos(list);
+      setLoading(false);
       if (list.length) openMemo(list[0].id);
     });
   }, []);
@@ -45,15 +57,18 @@ export default function App() {
       body: JSON.stringify({ username, password }),
     });
     if (!r.ok) return false;
+    localStorage.setItem("qm-authed", "1");
     setAuthed(true);
     const list = (await (await api("/memos")).json()) as MemoMeta[];
     setMemos(list);
+    setLoading(false);
     if (list.length) openMemo(list[0].id);
     return true;
   }
 
   async function logout() {
     await api("/logout", { method: "POST" });
+    localStorage.removeItem("qm-authed");
     setAuthed(false);
     setMemos([]);
     setCurrentId(null);
@@ -148,8 +163,7 @@ export default function App() {
 
   const html = useMemo(() => marked.parse(content) as string, [content]);
 
-  if (authed === null) return <div className="center">…</div>;
-  if (authed === false) return <Login onLogin={login} />;
+  if (!authed) return <Login onLogin={login} />;
 
   return (
     <div className="app">
@@ -180,7 +194,9 @@ export default function App() {
                 </button>
               </li>
             ))}
-            {memos.length === 0 && <li className="empty">No memos</li>}
+            {memos.length === 0 && (
+              <li className="empty">{loading ? "Loading…" : "No memos"}</li>
+            )}
           </ul>
         </aside>
       )}
@@ -194,7 +210,9 @@ export default function App() {
         </div>
 
         {currentId == null ? (
-          <div className="center">Select a memo on the left, or create a new one.</div>
+          <div className="center">
+            {loading ? "Loading…" : "Select a memo on the left, or create a new one."}
+          </div>
         ) : (
           <div className="pane">
             <textarea

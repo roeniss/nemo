@@ -56,7 +56,7 @@ function titleFrom(content: string): string {
 
 app.get("/api/memos", async (c) => {
   const { results } = await c.env.DB.prepare(
-    "SELECT id, title, updated_at FROM memos ORDER BY updated_at DESC"
+    "SELECT id, title, updated_at FROM memos WHERE deleted_at IS NULL ORDER BY updated_at DESC"
   ).all();
   return c.json(results);
 });
@@ -72,7 +72,9 @@ app.post("/api/memos", async (c) => {
 });
 
 app.get("/api/memos/:id", async (c) => {
-  const row = await c.env.DB.prepare("SELECT * FROM memos WHERE id = ?")
+  const row = await c.env.DB.prepare(
+    "SELECT * FROM memos WHERE id = ? AND deleted_at IS NULL"
+  )
     .bind(c.req.param("id"))
     .first();
   if (!row) return c.json({ error: "not found" }, 404);
@@ -92,8 +94,9 @@ app.put("/api/memos/:id", async (c) => {
 });
 
 app.delete("/api/memos/:id", async (c) => {
-  await c.env.DB.prepare("DELETE FROM memos WHERE id = ?")
-    .bind(c.req.param("id"))
+  // soft delete: mark deleted, keep the row
+  await c.env.DB.prepare("UPDATE memos SET deleted_at = ? WHERE id = ?")
+    .bind(Date.now(), c.req.param("id"))
     .run();
   return c.json({ ok: true });
 });

@@ -15,11 +15,36 @@ const MAX_AGE = 60 * 60 * 24 * 30; // 30d
 const app = new Hono<{ Bindings: Bindings }>();
 
 // --- auth ---------------------------------------------------------------
+const MAX_FAILS = 10;
+
 app.post("/api/login", async (c) => {
-  const { username, password } = await c.req.json<{ username: string; password: string }>();
-  if (username !== c.env.AUTH_USER || password !== c.env.AUTH_PASS) {
-    return c.json({ error: "invalid credentials" }, 401);
+  // circuit breaker: once locked, reject everything until manually reset in D1
+  const state = await c.env.DB.prepare(
+    "SELECT failed_count, locked FROM auth_state WHERE id = 1"
+  ).first<{ failed_count: number; locked: number }>();
+  if (state?.locked) {
+    return c.json({ error: "locked", locked: true }, 403);
   }
+
+  const { username, password } = await c.req.json<{ username: string; password: string }>();
+  const ok = username === c.env.AUTH_USER && password === c.env.AUTH_PASS;
+
+  if (!ok) {
+    const row = await c.env.DB.prepare(
+      "UPDATE auth_state SET failed_count = failed_count + 1, " +
+        "locked = (failed_count + 1 >= ?) WHERE id = 1 RETURNING failed_count, locked"
+    )
+      .bind(MAX_FAILS)
+      .first<{ failed_count: number; locked: number }>();
+    const locked = !!row?.locked;
+    return c.json(
+      { error: "invalid", locked, remaining: Math.max(0, MAX_FAILS - (row?.failed_count ?? 0)) },
+      locked ? 403 : 401
+    );
+  }
+
+  // success — reset the counter
+  await c.env.DB.prepare("UPDATE auth_state SET failed_count = 0 WHERE id = 1").run();
   const token = await sign(
     { sub: username, exp: Math.floor(Date.now() / 1000) + MAX_AGE },
     c.env.JWT_SECRET

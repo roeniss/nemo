@@ -5,6 +5,7 @@ marked.setOptions({ gfm: true, breaks: true });
 
 type MemoMeta = { id: number; title: string; updated_at: number };
 type Memo = MemoMeta & { content: string; created_at: number };
+type LoginResult = { ok: boolean; locked?: boolean; remaining?: number };
 
 async function api(path: string, init?: RequestInit) {
   const res = await fetch(`/api${path}`, {
@@ -25,6 +26,9 @@ export default function App() {
   const [trash, setTrash] = useState<MemoMeta[]>([]);
   const [view, setView] = useState<"memos" | "trash">("memos");
   const [query, setQuery] = useState("");
+  const [undo, setUndo] = useState<{ id: number; title: string } | null>(null);
+  const undoTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const loadedAt = useRef(0); // updated_at of the currently open memo (for sync)
   const [currentId, setCurrentId] = useState<number | null>(null);
   const [content, setContent] = useState("");
   const [sidebar, setSidebar] = useState(true);
@@ -54,19 +58,22 @@ export default function App() {
     });
   }, []);
 
-  async function login(username: string, password: string) {
+  async function login(username: string, password: string): Promise<LoginResult> {
     const r = await api("/login", {
       method: "POST",
       body: JSON.stringify({ username, password }),
     });
-    if (!r.ok) return false;
+    if (!r.ok) {
+      const d = (await r.json().catch(() => ({}))) as { locked?: boolean; remaining?: number };
+      return { ok: false, locked: !!d.locked, remaining: d.remaining };
+    }
     localStorage.setItem("qm-authed", "1");
     setAuthed(true);
     const list = (await (await api("/memos")).json()) as MemoMeta[];
     setMemos(list);
     setLoading(false);
     if (list.length) openMemo(list[0].id);
-    return true;
+    return { ok: true };
   }
 
   async function logout() {
@@ -92,6 +99,7 @@ export default function App() {
     const memo = (await (await api(`/memos/${id}`)).json()) as Memo;
     setCurrentId(memo.id);
     setContent(memo.content);
+    loadedAt.current = memo.updated_at;
   }
 
   async function newMemo() {
@@ -103,13 +111,25 @@ export default function App() {
   }
 
   async function deleteMemo(id: number) {
-    if (!confirm("Delete this memo?")) return;
+    const m = memos.find((x) => x.id === id);
     await api(`/memos/${id}`, { method: "DELETE" });
-    setMemos((m) => m.filter((x) => x.id !== id));
+    setMemos((ms) => ms.filter((x) => x.id !== id));
     if (currentId === id) {
       setCurrentId(null);
       setContent("");
     }
+    setUndo({ id, title: m?.title || "Untitled" });
+    if (undoTimer.current) clearTimeout(undoTimer.current);
+    undoTimer.current = setTimeout(() => setUndo(null), 6000);
+  }
+
+  async function undoDelete() {
+    if (!undo) return;
+    const id = undo.id;
+    if (undoTimer.current) clearTimeout(undoTimer.current);
+    setUndo(null);
+    await api(`/memos/${id}/restore`, { method: "POST" });
+    setMemos((await (await api("/memos")).json()) as MemoMeta[]);
   }
 
   async function loadTrash() {
@@ -139,8 +159,38 @@ export default function App() {
         (a, b) => b.updated_at - a.updated_at
       )
     );
+    if (id === currentIdRef.current) loadedAt.current = updated_at;
     setSaving(false);
   }
+
+  // periodic multi-session sync: refresh the list, and reload the open memo if
+  // it was changed elsewhere (but never while the user has unsaved local edits)
+  useEffect(() => {
+    if (!authed) return;
+    async function sync() {
+      if (document.hidden) return;
+      const r = await api("/memos");
+      if (!r.ok) return;
+      const list = (await r.json()) as MemoMeta[];
+      setMemos(list);
+      const id = currentIdRef.current;
+      if (id == null || timer.current != null) return; // skip mid-edit
+      const cur = list.find((x) => x.id === id);
+      if (cur && cur.updated_at > loadedAt.current) {
+        const memo = (await (await api(`/memos/${id}`)).json()) as Memo;
+        if (timer.current == null && currentIdRef.current === id) {
+          setContent(memo.content);
+          loadedAt.current = memo.updated_at;
+        }
+      }
+    }
+    const iv = setInterval(sync, 10000);
+    window.addEventListener("focus", sync);
+    return () => {
+      clearInterval(iv);
+      window.removeEventListener("focus", sync);
+    };
+  }, [authed]);
 
   // Cmd/Ctrl+S: flush pending debounce and save immediately
   useEffect(() => {
@@ -295,19 +345,35 @@ export default function App() {
           </div>
         )}
       </div>
+
+      {undo && (
+        <div className="toast">
+          <span>Deleted "{undo.title}"</span>
+          <button onClick={undoDelete}>Undo</button>
+        </div>
+      )}
     </div>
   );
 }
 
-function Login({ onLogin }: { onLogin: (u: string, p: string) => Promise<boolean> }) {
+function Login({ onLogin }: { onLogin: (u: string, p: string) => Promise<LoginResult> }) {
   const [u, setU] = useState("");
   const [p, setP] = useState("");
-  const [err, setErr] = useState(false);
+  const [msg, setMsg] = useState<string | null>(null);
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
-    const ok = await onLogin(u, p);
-    setErr(!ok);
+    const res = await onLogin(u, p);
+    if (res.ok) return;
+    if (res.locked) {
+      setMsg("Login is disabled after too many failed attempts. Manual reset required.");
+    } else {
+      setMsg(
+        `Invalid username or password.${
+          res.remaining != null ? ` ${res.remaining} attempt(s) left.` : ""
+        }`
+      );
+    }
   }
 
   return (
@@ -322,7 +388,7 @@ function Login({ onLogin }: { onLogin: (u: string, p: string) => Promise<boolean
           onChange={(e) => setP(e.target.value)}
         />
         <button type="submit">Login</button>
-        {err && <p className="err">Invalid username or password.</p>}
+        {msg && <p className="err">{msg}</p>}
       </form>
     </div>
   );

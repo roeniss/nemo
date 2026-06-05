@@ -5,9 +5,21 @@ marked.setOptions({ gfm: true, breaks: true });
 
 type MemoMeta = { id: number; title: string; updated_at: number };
 type Memo = MemoMeta & { content: string; created_at: number };
-type LoginResult = { ok: boolean; locked?: boolean; remaining?: number };
+type LoginResult = { ok: boolean; status?: number };
 
 const DRAFT = "qm-draft-"; // localStorage key prefix for unsynced edits
+// public site key (build-time). Empty = widget dormant until keys are configured.
+const TURNSTILE_SITEKEY = import.meta.env.VITE_TURNSTILE_SITEKEY || "";
+
+declare global {
+  interface Window {
+    turnstile?: {
+      render: (el: HTMLElement, opts: { sitekey: string; callback: (token: string) => void }) => string;
+      reset: (el: HTMLElement) => void;
+    };
+    __cfTurnstileOnload?: () => void;
+  }
+}
 
 async function api(path: string, init?: RequestInit) {
   const res = await fetch(`/api${path}`, {
@@ -65,15 +77,16 @@ export default function App() {
     }).catch(() => setLoading(false)); // offline: render the cached shell
   }, []);
 
-  async function login(username: string, password: string): Promise<LoginResult> {
+  async function login(
+    username: string,
+    password: string,
+    turnstileToken: string
+  ): Promise<LoginResult> {
     const r = await api("/login", {
       method: "POST",
-      body: JSON.stringify({ username, password }),
+      body: JSON.stringify({ username, password, turnstileToken }),
     });
-    if (!r.ok) {
-      const d = (await r.json().catch(() => ({}))) as { locked?: boolean; remaining?: number };
-      return { ok: false, locked: !!d.locked, remaining: d.remaining };
-    }
+    if (!r.ok) return { ok: false, status: r.status };
     localStorage.setItem("qm-authed", "1");
     setAuthed(true);
     const list = (await (await api("/memos")).json()) as MemoMeta[];
@@ -476,23 +489,53 @@ export default function App() {
   );
 }
 
-function Login({ onLogin }: { onLogin: (u: string, p: string) => Promise<LoginResult> }) {
+function Login({
+  onLogin,
+}: {
+  onLogin: (u: string, p: string, token: string) => Promise<LoginResult>;
+}) {
   const [u, setU] = useState("");
   const [p, setP] = useState("");
   const [msg, setMsg] = useState<string | null>(null);
+  const [token, setToken] = useState("");
+  const widget = useRef<HTMLDivElement>(null);
+
+  // load + render the Turnstile widget (only when a site key is configured)
+  useEffect(() => {
+    if (!TURNSTILE_SITEKEY) return;
+    function renderWidget() {
+      if (window.turnstile && widget.current && !widget.current.hasChildNodes()) {
+        window.turnstile.render(widget.current, { sitekey: TURNSTILE_SITEKEY, callback: setToken });
+      }
+    }
+    if (window.turnstile) {
+      renderWidget();
+      return;
+    }
+    window.__cfTurnstileOnload = renderWidget;
+    const id = "cf-turnstile-script";
+    if (!document.getElementById(id)) {
+      const s = document.createElement("script");
+      s.id = id;
+      s.src =
+        "https://challenges.cloudflare.com/turnstile/v0/api.js?onload=__cfTurnstileOnload&render=explicit";
+      s.async = true;
+      document.head.appendChild(s);
+    }
+  }, []);
 
   async function submit(e: Event) {
     e.preventDefault();
-    const res = await onLogin(u, p);
+    const res = await onLogin(u, p, token);
     if (res.ok) return;
-    if (res.locked) {
-      setMsg("Login is disabled after too many failed attempts. Manual reset required.");
-    } else {
-      setMsg(
-        `Invalid username or password.${
-          res.remaining != null ? ` ${res.remaining} attempt(s) left.` : ""
-        }`
-      );
+    setMsg(
+      res.status === 403
+        ? "Verification failed. Please try again."
+        : "Invalid username or password."
+    );
+    if (window.turnstile && widget.current) {
+      window.turnstile.reset(widget.current);
+      setToken("");
     }
   }
 
@@ -507,6 +550,7 @@ function Login({ onLogin }: { onLogin: (u: string, p: string) => Promise<LoginRe
           value={p}
           onChange={(e) => setP(e.currentTarget.value)}
         />
+        {TURNSTILE_SITEKEY && <div ref={widget} className="turnstile" />}
         <button type="submit">Login</button>
         {msg && <p className="err">{msg}</p>}
       </form>

@@ -11,12 +11,6 @@ CREATE TABLE memos (
   updated_at INTEGER NOT NULL,
   deleted_at INTEGER
 );
-CREATE TABLE auth_state (
-  id INTEGER PRIMARY KEY CHECK (id = 1),
-  failed_count INTEGER NOT NULL DEFAULT 0,
-  locked INTEGER NOT NULL DEFAULT 0
-);
-INSERT INTO auth_state (id) VALUES (1);
 `;
 
 let env: Record<string, unknown>;
@@ -47,26 +41,17 @@ describe("auth", () => {
     expect((await req("/api/memos")).status).toBe(401);
   });
 
-  it("counts failed logins and reports remaining", async () => {
-    const r = await login("wrong");
-    expect(r.status).toBe(401);
-    expect(await r.json()).toMatchObject({ remaining: 9, locked: false });
+  it("rejects a wrong password", async () => {
+    expect((await login("wrong")).status).toBe(401);
   });
 
-  it("locks after 10 failures and rejects even the correct password", async () => {
-    for (let i = 0; i < 10; i++) await login("wrong");
-    expect((await login("wrong")).status).toBe(403);
-    const correct = await login("pw");
-    expect(correct.status).toBe(403); // breaker is open
-    expect(await correct.json()).toMatchObject({ locked: true });
+  it("accepts the correct password and sets a cookie", async () => {
+    const r = await login();
+    expect(r.status).toBe(200);
+    expect(r.headers.get("set-cookie")).toContain("token=");
   });
-
-  it("resets the failure counter on a successful login", async () => {
-    await login("wrong");
-    await login("pw");
-    const row = await env.DB!.prepare("SELECT failed_count FROM auth_state WHERE id = 1").first();
-    expect(row.failed_count).toBe(0);
-  });
+  // Turnstile is skipped here (no TURNSTILE_SECRET in the test env), matching
+  // the worker's "enforce only when configured" behaviour.
 });
 
 describe("memos", () => {

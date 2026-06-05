@@ -57,6 +57,9 @@ input {
   font-size: 13px;
   margin: 0;
 }
+.turnstile {
+  min-height: 65px;
+}
 
 /* layout */
 .app {

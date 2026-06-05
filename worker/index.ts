@@ -7,6 +7,7 @@ type Bindings = {
   AUTH_USER: string;
   AUTH_PASS: string;
   JWT_SECRET: string;
+  TURNSTILE_SECRET?: string; // bot protection — enforced only when set
 };
 
 const COOKIE = "token";
@@ -15,36 +16,40 @@ const MAX_AGE = 60 * 60 * 24 * 30; // 30d
 const app = new Hono<{ Bindings: Bindings }>();
 
 // --- auth ---------------------------------------------------------------
-const MAX_FAILS = 10;
+async function verifyTurnstile(token: string, secret: string, ip: string | null): Promise<boolean> {
+  const form = new FormData();
+  form.append("secret", secret);
+  form.append("response", token);
+  if (ip) form.append("remoteip", ip);
+  const res = await fetch("https://challenges.cloudflare.com/turnstile/v0/siteverify", {
+    method: "POST",
+    body: form,
+  });
+  const data = (await res.json()) as { success: boolean };
+  return data.success === true;
+}
 
 app.post("/api/login", async (c) => {
-  // circuit breaker: once locked, reject everything until manually reset in D1
-  const state = await c.env.DB.prepare(
-    "SELECT failed_count, locked FROM auth_state WHERE id = 1"
-  ).first<{ failed_count: number; locked: number }>();
-  if (state?.locked) {
-    return c.json({ error: "locked", locked: true }, 403);
+  const { username, password, turnstileToken } = await c.req.json<{
+    username: string;
+    password: string;
+    turnstileToken?: string;
+  }>();
+
+  // Turnstile bot protection — only enforced when a secret is configured,
+  // so the app keeps working before the keys are set up.
+  if (c.env.TURNSTILE_SECRET) {
+    const ip = c.req.header("cf-connecting-ip") ?? null;
+    const ok = turnstileToken
+      ? await verifyTurnstile(turnstileToken, c.env.TURNSTILE_SECRET, ip)
+      : false;
+    if (!ok) return c.json({ error: "verification failed" }, 403);
   }
 
-  const { username, password } = await c.req.json<{ username: string; password: string }>();
-  const ok = username === c.env.AUTH_USER && password === c.env.AUTH_PASS;
-
-  if (!ok) {
-    const row = await c.env.DB.prepare(
-      "UPDATE auth_state SET failed_count = failed_count + 1, " +
-        "locked = (failed_count + 1 >= ?) WHERE id = 1 RETURNING failed_count, locked"
-    )
-      .bind(MAX_FAILS)
-      .first<{ failed_count: number; locked: number }>();
-    const locked = !!row?.locked;
-    return c.json(
-      { error: "invalid", locked, remaining: Math.max(0, MAX_FAILS - (row?.failed_count ?? 0)) },
-      locked ? 403 : 401
-    );
+  if (username !== c.env.AUTH_USER || password !== c.env.AUTH_PASS) {
+    return c.json({ error: "invalid credentials" }, 401);
   }
 
-  // success — reset the counter
-  await c.env.DB.prepare("UPDATE auth_state SET failed_count = 0 WHERE id = 1").run();
   const token = await sign(
     { sub: username, exp: Math.floor(Date.now() / 1000) + MAX_AGE },
     c.env.JWT_SECRET

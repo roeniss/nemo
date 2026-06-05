@@ -22,7 +22,7 @@ Local credentials live in `.dev.vars` (AUTH_USER / AUTH_PASS / JWT_SECRET).
 
 ## Deploy
 
-CI deploys automatically on push to `main` (`.github/workflows/deploy.yml`). Required GitHub secrets: `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID`.
+CI deploys automatically on push to `main` (`.github/workflows/deploy.yml`). Required GitHub secrets: `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID`. Optional GitHub **variable** `VITE_TURNSTILE_SITEKEY` (see Bot protection below).
 
 Manual deploy from your machine:
 ```bash
@@ -38,17 +38,25 @@ npm run deploy
 ```
 The `memo.roeni.ss` custom domain is wired via the `routes` (custom_domain) entry in `wrangler.jsonc` — the `roeni.ss` zone must be on the same Cloudflare account.
 
-## Login lockout recovery (circuit breaker)
+## Bot protection (Cloudflare Turnstile)
 
-After 10 failed logins the app locks itself (`auth_state.locked = 1`) and rejects
-**every** login — even with the correct password — until it is manually reset.
-Flip the breaker back on:
+Login is protected by [Turnstile](https://developers.cloudflare.com/turnstile/).
+It is **enforced only when configured**, so the app keeps working before keys are
+set up. To enable it:
 
-```bash
-npx wrangler d1 execute quick-memo-db --remote --command "UPDATE auth_state SET locked = 0, failed_count = 0 WHERE id = 1;"
-```
+1. Cloudflare dashboard → Turnstile → add a widget for `memo.roeni.ss`. Copy the
+   **site key** (public) and **secret key**.
+2. Set the secret as a Worker secret:
+   ```bash
+   npx wrangler secret put TURNSTILE_SECRET
+   ```
+3. Expose the site key to the build — add a GitHub Actions **variable** (not secret)
+   named `VITE_TURNSTILE_SITEKEY` (Settings → Secrets and variables → Actions →
+   Variables), then re-run the deploy.
 
-(Or run the same `UPDATE` in the Cloudflare dashboard → D1 → quick-memo-db console.)
+Local dev: put `VITE_TURNSTILE_SITEKEY=1x00000000000000000000AA` (Cloudflare's
+"always passes" test key) in `.env.local` to render the widget; leave
+`TURNSTILE_SECRET` unset so the worker skips verification offline.
 
 ## Backup / recovery (D1 Time Travel)
 

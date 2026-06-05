@@ -2,20 +2,29 @@
 
 ## Supported Versions
 
-Use this section to tell people about which versions of your project are
-currently being supported with security updates.
+This is a single-maintainer personal project. Only the latest version deployed
+from the `main` branch is supported — there are no tagged releases or backports.
 
-| Version | Supported          |
-| ------- | ------------------ |
-| 5.1.x   | :white_check_mark: |
-| 5.0.x   | :x:                |
-| 4.0.x   | :white_check_mark: |
-| < 4.0   | :x:                |
+| Version          | Supported |
+| ---------------- | --------- |
+| `main` (latest)  | ✅        |
+| anything older   | ❌        |
 
 ## Reporting a Vulnerability
 
-Use this section to tell people how to report a vulnerability.
+Please report security issues **privately** — do not open a public issue.
 
-Tell them where to go, how often they can expect to get an update on a
-reported vulnerability, what to expect if the vulnerability is accepted or
-declined, etc.
+- Open a private advisory: <https://github.com/roeniss/quick-memo/security/advisories/new>
+- Or email: roeniss2@gmail.com
+
+Expect an initial response within a few days. As a hobby project maintained in
+spare time, fixes are best-effort.
+
+## Design notes
+
+- Single-user app: one hard-coded credential (`AUTH_USER` / `AUTH_PASS`) plus a
+  signed JWT in an httpOnly, `Secure`, `SameSite=Lax` cookie.
+- Markdown is rendered with `marked` and injected via `innerHTML`. Content is
+  authored by the authenticated owner only — do not paste untrusted markdown.
+- Secrets live as Cloudflare Worker secrets and GitHub Actions secrets; they are
+  never committed (`.dev.vars` is gitignored).

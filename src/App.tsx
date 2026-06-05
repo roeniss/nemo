@@ -1,6 +1,7 @@
-import { useEffect, useRef, useState } from "react";
-import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { marked } from "marked";
+
+marked.setOptions({ gfm: true, breaks: true });
 
 type MemoMeta = { id: number; title: string; updated_at: number };
 type Memo = MemoMeta & { content: string; created_at: number };
@@ -145,6 +146,8 @@ export default function App() {
     return () => window.removeEventListener("beforeunload", onUnload);
   }, []);
 
+  const html = useMemo(() => marked.parse(content) as string, [content]);
+
   if (authed === null) return <div className="center">…</div>;
   if (authed === false) return <Login onLogin={login} />;
 
@@ -201,9 +204,7 @@ export default function App() {
               placeholder="# Title&#10;&#10;Write in markdown…"
               spellCheck={false}
             />
-            <div className="preview markdown">
-              <ReactMarkdown remarkPlugins={[remarkGfm]}>{content}</ReactMarkdown>
-            </div>
+            <div className="preview markdown" dangerouslySetInnerHTML={{ __html: html }} />
           </div>
         )}
       </div>

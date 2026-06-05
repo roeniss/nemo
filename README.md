@@ -49,3 +49,16 @@ npx wrangler d1 execute quick-memo-db --remote --command "UPDATE auth_state SET 
 ```
 
 (Or run the same `UPDATE` in the Cloudflare dashboard → D1 → quick-memo-db console.)
+
+## Backup / recovery (D1 Time Travel)
+
+D1 keeps an automatic point-in-time history for the last ~30 days — no setup
+or export needed. If memos are lost or corrupted, restore the database:
+
+```bash
+# see available restore points (bookmarks)
+npx wrangler d1 time-travel info quick-memo-db --remote
+
+# restore to a timestamp or bookmark
+npx wrangler d1 time-travel restore quick-memo-db --remote --timestamp="2026-06-05T00:00:00Z"
+```

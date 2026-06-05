@@ -62,7 +62,7 @@ export default function App() {
       setMemos(list);
       setLoading(false);
       if (list.length) openMemo(list[0].id);
-    });
+    }).catch(() => setLoading(false)); // offline: render the cached shell
   }, []);
 
   async function login(username: string, password: string): Promise<LoginResult> {

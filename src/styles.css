@@ -172,6 +172,9 @@ input {
   font-size: 12px;
   color: #999;
 }
+.status.offline {
+  color: #c0392b;
+}
 
 .pane {
   flex: 1;

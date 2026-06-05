@@ -7,6 +7,8 @@ type MemoMeta = { id: number; title: string; updated_at: number };
 type Memo = MemoMeta & { content: string; created_at: number };
 type LoginResult = { ok: boolean; locked?: boolean; remaining?: number };
 
+const DRAFT = "qm-draft-"; // localStorage key prefix for unsynced edits
+
 async function api(path: string, init?: RequestInit) {
   const res = await fetch(`/api${path}`, {
     ...init,
@@ -37,6 +39,7 @@ export default function App() {
   const [content, setContent] = useState("");
   const [sidebar, setSidebar] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [offline, setOffline] = useState(false);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   // latest values for the beforeunload handler (avoids stale closure)
   const contentRef = useRef(content);
@@ -109,7 +112,11 @@ export default function App() {
         timer.current = null;
       }
       freshIds.current.delete(id);
-      await api(`/memos/${id}?purge=1`, { method: "DELETE" });
+      try {
+        await api(`/memos/${id}?purge=1`, { method: "DELETE" });
+      } catch {
+        // offline — leave the empty row; it can be cleaned up later
+      }
       setMemos((ms) => ms.filter((x) => x.id !== id));
       return;
     }
@@ -122,8 +129,16 @@ export default function App() {
     setConflict(false);
     const memo = (await (await api(`/memos/${id}`)).json()) as Memo;
     setCurrentId(memo.id);
-    setContent(memo.content);
-    loadedAt.current = memo.updated_at;
+    const draft = localStorage.getItem(DRAFT + id);
+    if (draft != null && draft !== memo.content) {
+      // unsynced local edit from a previous failed save — keep it and retry push
+      setContent(draft);
+      loadedAt.current = memo.updated_at;
+      save(memo.id, draft);
+    } else {
+      setContent(memo.content);
+      loadedAt.current = memo.updated_at;
+    }
   }
 
   async function newMemo() {
@@ -173,6 +188,8 @@ export default function App() {
   function onEdit(value: string) {
     setContent(value);
     if (currentId == null) return;
+    // local-first: persist to localStorage immediately, before any network call
+    localStorage.setItem(DRAFT + currentId, value);
     if (conflictRef.current) return; // resolve the conflict first; don't autosave
     if (timer.current) clearTimeout(timer.current);
     setSaving(true);
@@ -181,25 +198,42 @@ export default function App() {
 
   async function save(id: number, value: string) {
     if (value.trim()) freshIds.current.delete(id); // now has content — keep it
-    const r = await api(`/memos/${id}`, {
-      method: "PUT",
-      body: JSON.stringify({ content: value, base: loadedAt.current }),
-    });
-    if (r.status === 409) {
-      // changed in another session — stop autosaving, let the user choose
-      conflictRef.current = true;
-      setConflict(true);
+    try {
+      const r = await api(`/memos/${id}`, {
+        method: "PUT",
+        body: JSON.stringify({ content: value, base: loadedAt.current }),
+      });
+      if (r.status === 409) {
+        // changed in another session — stop autosaving, let the user choose
+        conflictRef.current = true;
+        setConflict(true);
+        setSaving(false);
+        return;
+      }
+      const { title, updated_at } = (await r.json()) as { title: string; updated_at: number };
+      localStorage.removeItem(DRAFT + id); // synced — drop the local draft
+      setOffline(false);
+      setMemos((m) =>
+        [{ id, title, updated_at }, ...m.filter((x) => x.id !== id)].sort(
+          (a, b) => b.updated_at - a.updated_at
+        )
+      );
+      if (id === currentIdRef.current) loadedAt.current = updated_at;
       setSaving(false);
-      return;
+    } catch {
+      // network failure — the draft in localStorage is the safety net; retry later
+      setOffline(true);
+      setSaving(false);
     }
-    const { title, updated_at } = (await r.json()) as { title: string; updated_at: number };
-    setMemos((m) =>
-      [{ id, title, updated_at }, ...m.filter((x) => x.id !== id)].sort(
-        (a, b) => b.updated_at - a.updated_at
-      )
-    );
-    if (id === currentIdRef.current) loadedAt.current = updated_at;
-    setSaving(false);
+  }
+
+  // push any unsynced draft for the current memo (on reconnect / focus / poll)
+  async function retryDrafts() {
+    if (!navigator.onLine || conflictRef.current) return;
+    const id = currentIdRef.current;
+    if (id == null) return;
+    const d = localStorage.getItem(DRAFT + id);
+    if (d != null) await save(id, d);
   }
 
   // conflict resolution
@@ -233,12 +267,14 @@ export default function App() {
     if (!authed) return;
     async function sync() {
       if (document.hidden) return;
-      const r = await api("/memos");
-      if (!r.ok) return;
+      retryDrafts(); // push any unsynced offline edits
+      const r = await api("/memos").catch(() => null);
+      if (!r || !r.ok) return;
       const list = (await r.json()) as MemoMeta[];
       setMemos(list);
       const id = currentIdRef.current;
       if (id == null || timer.current != null || conflictRef.current) return; // skip mid-edit / conflict
+      if (localStorage.getItem(DRAFT + id) != null) return; // unsynced local draft pending
       const cur = list.find((x) => x.id === id);
       if (cur && cur.updated_at > loadedAt.current) {
         const memo = (await (await api(`/memos/${id}`)).json()) as Memo;
@@ -296,6 +332,12 @@ export default function App() {
     }
     window.addEventListener("beforeunload", onUnload);
     return () => window.removeEventListener("beforeunload", onUnload);
+  }, []);
+
+  // retry unsynced drafts the moment the network comes back
+  useEffect(() => {
+    window.addEventListener("online", retryDrafts);
+    return () => window.removeEventListener("online", retryDrafts);
   }, []);
 
   const html = useMemo(() => marked.parse(content) as string, [content]);
@@ -393,7 +435,9 @@ export default function App() {
           <button className="ghost" onClick={() => setSidebar((s) => !s)}>
             {sidebar ? "◀" : "▶"}
           </button>
-          <span className="status">{saving ? "Saving…" : "Saved"}</span>
+          <span className={offline ? "status offline" : "status"}>
+            {offline ? "Offline — saved locally" : saving ? "Saving…" : "Saved"}
+          </span>
         </div>
 
         {conflict && (

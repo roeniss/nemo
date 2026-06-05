@@ -1,0 +1,207 @@
+* {
+  box-sizing: border-box;
+}
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  color: #1a1a1a;
+  background: #fff;
+}
+button {
+  font: inherit;
+  cursor: pointer;
+  border: 1px solid #d0d0d0;
+  background: #f7f7f7;
+  border-radius: 4px;
+  padding: 4px 8px;
+}
+button.ghost {
+  border: none;
+  background: transparent;
+}
+input {
+  font: inherit;
+  border: 1px solid #d0d0d0;
+  border-radius: 4px;
+  padding: 8px;
+}
+
+.center {
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #888;
+}
+
+/* login */
+.login {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: 260px;
+}
+.login h1 {
+  margin: 0 0 8px;
+  font-size: 20px;
+  color: #1a1a1a;
+  text-align: center;
+}
+.login .err {
+  color: #c0392b;
+  font-size: 13px;
+  margin: 0;
+}
+
+/* layout */
+.app {
+  display: flex;
+  height: 100%;
+}
+.sidebar {
+  width: 240px;
+  flex-shrink: 0;
+  border-right: 1px solid #e5e5e5;
+  background: #fafafa;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.side-head {
+  display: flex;
+  gap: 6px;
+  padding: 10px;
+  border-bottom: 1px solid #e5e5e5;
+}
+.side-head button {
+  flex: 1;
+}
+.memo-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  overflow-y: auto;
+  flex: 1;
+}
+.memo-list li {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 10px;
+  border-bottom: 1px solid #eee;
+  font-size: 14px;
+}
+.memo-list li.active {
+  background: #ececec;
+}
+.memo-list li.empty {
+  color: #aaa;
+  cursor: default;
+}
+.memo-title {
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.del {
+  border: none;
+  background: transparent;
+  color: #bbb;
+  padding: 0 4px;
+  font-size: 16px;
+  line-height: 1;
+}
+.del:hover {
+  color: #c0392b;
+}
+
+.main {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.topbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 10px;
+  border-bottom: 1px solid #e5e5e5;
+}
+.status {
+  font-size: 12px;
+  color: #999;
+}
+
+.pane {
+  flex: 1;
+  display: flex;
+  min-height: 0;
+}
+.editor {
+  width: 50%;
+  border: none;
+  outline: none;
+  resize: none;
+  padding: 20px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 14px;
+  line-height: 1.6;
+  border-right: 1px solid #e5e5e5;
+}
+.preview {
+  width: 50%;
+  padding: 20px;
+  overflow-y: auto;
+}
+
+/* markdown */
+.markdown {
+  line-height: 1.6;
+}
+.markdown h1,
+.markdown h2,
+.markdown h3 {
+  border-bottom: 1px solid #eee;
+  padding-bottom: 0.2em;
+}
+.markdown pre {
+  background: #f4f4f4;
+  padding: 12px;
+  border-radius: 4px;
+  overflow-x: auto;
+}
+.markdown code {
+  background: #f4f4f4;
+  padding: 2px 4px;
+  border-radius: 3px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.9em;
+}
+.markdown pre code {
+  background: none;
+  padding: 0;
+}
+.markdown blockquote {
+  margin: 0;
+  padding-left: 12px;
+  border-left: 3px solid #ddd;
+  color: #666;
+}
+.markdown table {
+  border-collapse: collapse;
+}
+.markdown th,
+.markdown td {
+  border: 1px solid #ddd;
+  padding: 4px 8px;
+}
+.markdown img {
+  max-width: 100%;
+}

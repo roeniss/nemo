@@ -154,7 +154,7 @@ export default function App() {
           setSaving(true);
           save(currentId, content);
         }
-      } else if (k === "n") {
+      } else if (k === "k") {
         // new memo — newMemo() flushes the in-progress memo first
         e.preventDefault();
         newMemo();

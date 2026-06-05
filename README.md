@@ -1,35 +1,39 @@
 # quick-memo
 
-velog 스타일 좌 editor / 우 markdown 미니 메모장. Cloudflare Worker + D1 단일 워커. 비용 $0.
+A minimal velog-style markdown memo app — left editor / right preview. Single Cloudflare Worker + D1. ~$0 to run.
 
-## 스택
-- **배포**: Cloudflare Worker + Static Assets, D1(SQLite), 도메인 `memo.roeni.ss`
-- **구현**: Vite + React 19 + TS, Hono API, react-markdown, JWT 쿠키 인증
+## Stack
+- **Deploy**: Cloudflare Worker + Static Assets, D1 (SQLite), domain `memo.roeni.ss`
+- **Build**: Vite + React 19 + TS, Hono API, react-markdown, JWT cookie auth
 
-## 로컬 개발
+## Local development
 ```bash
 npm install
 
-# D1 DB 생성 (최초 1회) → 출력된 database_id를 wrangler.jsonc에 반영
+# Create the D1 database (once) → put the printed database_id into wrangler.jsonc
 npx wrangler d1 create quick-memo-db
 
-# 스키마 적용 (로컬)
+# Apply the schema (local)
 npm run db:local
 
 npm run dev          # http://localhost:5173
 ```
-로컬 인증 정보는 `.dev.vars` (AUTH_USER / AUTH_PASS / JWT_SECRET)에서 수정.
+Local credentials live in `.dev.vars` (AUTH_USER / AUTH_PASS / JWT_SECRET).
 
-## 배포
+## Deploy
+
+CI deploys automatically on push to `main` (`.github/workflows/deploy.yml`). Required GitHub secrets: `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID`.
+
+Manual deploy from your machine:
 ```bash
-# 운영 시크릿 등록 (최초 1회)
+# Register production secrets (once)
 npx wrangler secret put AUTH_USER
 npx wrangler secret put AUTH_PASS
 npx wrangler secret put JWT_SECRET
 
-# 운영 D1에 스키마 적용 (최초 1회)
+# Apply the schema to the remote D1 (once)
 npm run db:remote
 
 npm run deploy
 ```
-도메인 `memo.roeni.ss`는 `wrangler.jsonc`의 routes(custom_domain)로 자동 연결 (roeni.ss zone이 같은 CF 계정에 있어야 함).
+The `memo.roeni.ss` custom domain is wired via the `routes` (custom_domain) entry in `wrangler.jsonc` — the `roeni.ss` zone must be on the same Cloudflare account.

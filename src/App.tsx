@@ -31,6 +31,8 @@ export default function App() {
   const loadedAt = useRef(0); // updated_at of the currently open memo (for sync)
   const [conflict, setConflict] = useState(false);
   const conflictRef = useRef(false);
+  // memos created this session that have never held content (auto-purged on leave)
+  const freshIds = useRef<Set<number>>(new Set());
   const [currentId, setCurrentId] = useState<number | null>(null);
   const [content, setContent] = useState("");
   const [sidebar, setSidebar] = useState(true);
@@ -79,6 +81,7 @@ export default function App() {
   }
 
   async function logout() {
+    await leaveCurrent();
     await api("/logout", { method: "POST" });
     localStorage.removeItem("qm-authed");
     setAuthed(false);
@@ -96,8 +99,27 @@ export default function App() {
     }
   }
 
-  async function openMemo(id: number) {
+  // leaving the current memo: purge it if it's a never-used empty memo,
+  // otherwise flush any pending save
+  async function leaveCurrent() {
+    const id = currentIdRef.current;
+    if (id != null && freshIds.current.has(id) && content.trim() === "") {
+      if (timer.current) {
+        clearTimeout(timer.current);
+        timer.current = null;
+      }
+      freshIds.current.delete(id);
+      await api(`/memos/${id}?purge=1`, { method: "DELETE" });
+      setMemos((ms) => ms.filter((x) => x.id !== id));
+      return;
+    }
     await flush();
+  }
+
+  async function openMemo(id: number) {
+    await leaveCurrent();
+    conflictRef.current = false;
+    setConflict(false);
     const memo = (await (await api(`/memos/${id}`)).json()) as Memo;
     setCurrentId(memo.id);
     setContent(memo.content);
@@ -105,11 +127,15 @@ export default function App() {
   }
 
   async function newMemo() {
-    await flush();
-    const memo = (await (await api("/memos", { method: "POST" }).then((r) => r)).json()) as Memo;
+    await leaveCurrent();
+    conflictRef.current = false;
+    setConflict(false);
+    const memo = (await (await api("/memos", { method: "POST" })).json()) as Memo;
     setMemos((m) => [{ id: memo.id, title: memo.title, updated_at: memo.updated_at }, ...m]);
     setCurrentId(memo.id);
     setContent("");
+    loadedAt.current = memo.updated_at;
+    freshIds.current.add(memo.id);
   }
 
   async function deleteMemo(id: number) {
@@ -154,6 +180,7 @@ export default function App() {
   }
 
   async function save(id: number, value: string) {
+    if (value.trim()) freshIds.current.delete(id); // now has content — keep it
     const r = await api(`/memos/${id}`, {
       method: "PUT",
       body: JSON.stringify({ content: value, base: loadedAt.current }),
@@ -254,8 +281,12 @@ export default function App() {
   // flush pending save on tab close / reload (keepalive survives unload)
   useEffect(() => {
     function onUnload() {
-      if (timer.current && currentIdRef.current != null) {
-        fetch(`/api/memos/${currentIdRef.current}`, {
+      const id = currentIdRef.current;
+      if (id == null) return;
+      if (freshIds.current.has(id) && contentRef.current.trim() === "") {
+        fetch(`/api/memos/${id}?purge=1`, { method: "DELETE", keepalive: true });
+      } else if (timer.current) {
+        fetch(`/api/memos/${id}`, {
           method: "PUT",
           headers: { "content-type": "application/json" },
           body: JSON.stringify({ content: contentRef.current }),

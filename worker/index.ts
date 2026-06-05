@@ -147,10 +147,16 @@ app.put("/api/memos/:id", async (c) => {
 });
 
 app.delete("/api/memos/:id", async (c) => {
-  // soft delete: mark deleted, keep the row
-  await c.env.DB.prepare("UPDATE memos SET deleted_at = ? WHERE id = ?")
-    .bind(Date.now(), c.req.param("id"))
-    .run();
+  const id = c.req.param("id");
+  if (c.req.query("purge") === "1") {
+    // hard delete — used to clean up never-used empty memos
+    await c.env.DB.prepare("DELETE FROM memos WHERE id = ?").bind(id).run();
+  } else {
+    // soft delete: mark deleted, keep the row
+    await c.env.DB.prepare("UPDATE memos SET deleted_at = ? WHERE id = ?")
+      .bind(Date.now(), id)
+      .run();
+  }
   return c.json({ ok: true });
 });
 

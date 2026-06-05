@@ -4,7 +4,7 @@ A minimal velog-style markdown memo app — left editor / right preview. Single 
 
 ## Stack
 - **Deploy**: Cloudflare Worker + Static Assets, D1 (SQLite), domain `memo.roeni.ss`
-- **Build**: Vite + React 19 + TS, Hono API, react-markdown, JWT cookie auth
+- **Build**: Vite + Preact + TS, Hono API, `marked`, JWT cookie auth
 
 ## Local development
 ```bash
@@ -37,3 +37,15 @@ npm run db:remote
 npm run deploy
 ```
 The `memo.roeni.ss` custom domain is wired via the `routes` (custom_domain) entry in `wrangler.jsonc` — the `roeni.ss` zone must be on the same Cloudflare account.
+
+## Login lockout recovery (circuit breaker)
+
+After 10 failed logins the app locks itself (`auth_state.locked = 1`) and rejects
+**every** login — even with the correct password — until it is manually reset.
+Flip the breaker back on:
+
+```bash
+npx wrangler d1 execute quick-memo-db --remote --command "UPDATE auth_state SET locked = 0, failed_count = 0 WHERE id = 1;"
+```
+
+(Or run the same `UPDATE` in the Cloudflare dashboard → D1 → quick-memo-db console.)

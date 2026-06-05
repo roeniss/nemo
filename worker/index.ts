@@ -121,13 +121,27 @@ app.get("/api/memos/:id", async (c) => {
 });
 
 app.put("/api/memos/:id", async (c) => {
-  const { content } = await c.req.json<{ content: string }>();
+  const { content, base } = await c.req.json<{ content: string; base?: number | null }>();
+  const id = c.req.param("id");
+  // optimistic concurrency: if the row was updated elsewhere since `base`,
+  // reject instead of silently clobbering. (base omitted = force overwrite)
+  if (base != null) {
+    const cur = await c.env.DB.prepare(
+      "SELECT updated_at FROM memos WHERE id = ? AND deleted_at IS NULL"
+    )
+      .bind(id)
+      .first<{ updated_at: number }>();
+    if (!cur) return c.json({ error: "not found" }, 404);
+    if (cur.updated_at > base) {
+      return c.json({ conflict: true, updated_at: cur.updated_at }, 409);
+    }
+  }
   const title = titleFrom(content);
   const now = Date.now();
   await c.env.DB.prepare(
     "UPDATE memos SET title = ?, content = ?, updated_at = ? WHERE id = ?"
   )
-    .bind(title, content, now, c.req.param("id"))
+    .bind(title, content, now, id)
     .run();
   return c.json({ ok: true, title, updated_at: now });
 });

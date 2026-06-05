@@ -29,6 +29,8 @@ export default function App() {
   const [undo, setUndo] = useState<{ id: number; title: string } | null>(null);
   const undoTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const loadedAt = useRef(0); // updated_at of the currently open memo (for sync)
+  const [conflict, setConflict] = useState(false);
+  const conflictRef = useRef(false);
   const [currentId, setCurrentId] = useState<number | null>(null);
   const [content, setContent] = useState("");
   const [sidebar, setSidebar] = useState(true);
@@ -145,15 +147,25 @@ export default function App() {
   function onEdit(value: string) {
     setContent(value);
     if (currentId == null) return;
+    if (conflictRef.current) return; // resolve the conflict first; don't autosave
     if (timer.current) clearTimeout(timer.current);
     setSaving(true);
     timer.current = setTimeout(() => save(currentId, value), 300);
   }
 
   async function save(id: number, value: string) {
-    const { title, updated_at } = (await (
-      await api(`/memos/${id}`, { method: "PUT", body: JSON.stringify({ content: value }) })
-    ).json()) as { title: string; updated_at: number };
+    const r = await api(`/memos/${id}`, {
+      method: "PUT",
+      body: JSON.stringify({ content: value, base: loadedAt.current }),
+    });
+    if (r.status === 409) {
+      // changed in another session — stop autosaving, let the user choose
+      conflictRef.current = true;
+      setConflict(true);
+      setSaving(false);
+      return;
+    }
+    const { title, updated_at } = (await r.json()) as { title: string; updated_at: number };
     setMemos((m) =>
       [{ id, title, updated_at }, ...m.filter((x) => x.id !== id)].sort(
         (a, b) => b.updated_at - a.updated_at
@@ -161,6 +173,31 @@ export default function App() {
     );
     if (id === currentIdRef.current) loadedAt.current = updated_at;
     setSaving(false);
+  }
+
+  // conflict resolution
+  async function reloadCurrent() {
+    const id = currentIdRef.current;
+    if (id == null) return;
+    const memo = (await (await api(`/memos/${id}`)).json()) as Memo;
+    setContent(memo.content);
+    loadedAt.current = memo.updated_at;
+    conflictRef.current = false;
+    setConflict(false);
+  }
+
+  async function overwrite() {
+    const id = currentIdRef.current;
+    if (id == null) return;
+    conflictRef.current = false;
+    setConflict(false);
+    // no base → force overwrite
+    const r = await api(`/memos/${id}`, {
+      method: "PUT",
+      body: JSON.stringify({ content }),
+    });
+    const { updated_at } = (await r.json()) as { updated_at: number };
+    loadedAt.current = updated_at;
   }
 
   // periodic multi-session sync: refresh the list, and reload the open memo if
@@ -174,7 +211,7 @@ export default function App() {
       const list = (await r.json()) as MemoMeta[];
       setMemos(list);
       const id = currentIdRef.current;
-      if (id == null || timer.current != null) return; // skip mid-edit
+      if (id == null || timer.current != null || conflictRef.current) return; // skip mid-edit / conflict
       const cur = list.find((x) => x.id === id);
       if (cur && cur.updated_at > loadedAt.current) {
         const memo = (await (await api(`/memos/${id}`)).json()) as Memo;
@@ -327,6 +364,14 @@ export default function App() {
           </button>
           <span className="status">{saving ? "Saving…" : "Saved"}</span>
         </div>
+
+        {conflict && (
+          <div className="conflict">
+            <span>This memo was changed in another session.</span>
+            <button onClick={reloadCurrent}>Reload</button>
+            <button onClick={overwrite}>Overwrite</button>
+          </div>
+        )}
 
         {currentId == null ? (
           <div className="center">

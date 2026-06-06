@@ -3,7 +3,7 @@
 A minimal velog-style markdown memo app — left editor / right preview. Single Cloudflare Worker + D1. ~$0 to run.
 
 ## Stack
-- **Deploy**: Cloudflare Worker + Static Assets, D1 (SQLite), domain `memo.roeni.ss`
+- **Deploy**: Cloudflare Worker + Static Assets, D1 (SQLite), domain `nemo.roeni.ss`
 - **Build**: Vite + Preact + TS, Hono API, `marked`, JWT cookie auth
 
 ## Local development
@@ -36,7 +36,7 @@ npm run db:remote
 
 npm run deploy
 ```
-The `memo.roeni.ss` custom domain is wired via the `routes` (custom_domain) entry in `wrangler.jsonc` — the `roeni.ss` zone must be on the same Cloudflare account.
+The `nemo.roeni.ss` custom domain is wired via the `routes` (custom_domain) entry in `wrangler.jsonc` — the `roeni.ss` zone must be on the same Cloudflare account.
 
 ## Bot protection (Cloudflare Turnstile)
 
@@ -44,7 +44,7 @@ Login is protected by [Turnstile](https://developers.cloudflare.com/turnstile/).
 It is **enforced only when configured**, so the app keeps working before keys are
 set up. To enable it:
 
-1. Cloudflare dashboard → Turnstile → add a widget for `memo.roeni.ss`. Copy the
+1. Cloudflare dashboard → Turnstile → add a widget for `nemo.roeni.ss`. Copy the
    **site key** (public) and **secret key**.
 2. Set the secret as a Worker secret:
    ```bash

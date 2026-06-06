@@ -19,7 +19,7 @@
   ],
   "routes": [
     {
-      "pattern": "memo.roeni.ss",
+      "pattern": "nemo.roeni.ss",
       "custom_domain": true
     }
   ]

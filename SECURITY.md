@@ -14,7 +14,7 @@ from the `main` branch is supported — there are no tagged releases or backport
 
 Please report security issues **privately** — do not open a public issue.
 
-- Open a private advisory: <https://github.com/roeniss/quick-memo/security/advisories/new>
+- Open a private advisory: <https://github.com/roeniss/nemo/security/advisories/new>
 - Or email: roeniss2@gmail.com
 
 Expect an initial response within a few days. As a hobby project maintained in

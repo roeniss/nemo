@@ -240,7 +240,7 @@ export default function App() {
 
   // push local temp memos to the server (on reconnect / focus / poll)
   async function materializeTemps() {
-    if (!navigator.onLine || materializing.current) return;
+    if (materializing.current) return; // POSTs fail-fast if actually offline
     materializing.current = true;
     try {
       for (const t of readList(TEMPS_KEY)) {
@@ -393,14 +393,26 @@ export default function App() {
     }
   }
 
-  // push any unsynced work (temp memos + current draft) when back online
-  async function retryDrafts() {
-    if (!navigator.onLine || conflictRef.current) return;
+  // recover after a network blip: push unsynced work and clear the offline flag
+  // the moment the server is reachable again — independent of the flaky `online`
+  // event / navigator.onLine, and even when there is no draft to push
+  async function recover() {
+    if (conflictRef.current) return;
     await materializeTemps();
     const id = currentIdRef.current;
-    if (id == null || id < 0) return; // temp handled by materializeTemps
-    const d = localStorage.getItem(DRAFT + id);
-    if (d != null) await save(id, d);
+    if (id != null && id > 0) {
+      const d = localStorage.getItem(DRAFT + id);
+      if (d != null) {
+        await save(id, d); // clears `offline` on success
+        return;
+      }
+    }
+    // nothing pending — confirm connectivity and clear the banner
+    try {
+      if ((await api("/me")).ok) setOffline(false);
+    } catch {
+      // still offline
+    }
   }
 
   // conflict resolution
@@ -434,9 +446,10 @@ export default function App() {
     if (!authed) return;
     async function sync() {
       if (document.hidden) return;
-      retryDrafts(); // push any unsynced offline edits / temp memos
+      recover(); // push any unsynced offline edits / temp memos, clear offline
       const r = await api("/memos").catch(() => null);
       if (!r || !r.ok) return;
+      setOffline(false); // reached the server — definitely online
       const list = (await r.json()) as MemoMeta[];
       writeList(LIST_CACHE, list);
       setMemos([...readList(TEMPS_KEY), ...list].sort(byRecent)); // keep local temps visible
@@ -502,11 +515,18 @@ export default function App() {
     return () => window.removeEventListener("beforeunload", onUnload);
   }, []);
 
-  // retry unsynced drafts the moment the network comes back
+  // recover the moment the browser reports the network is back
   useEffect(() => {
-    window.addEventListener("online", retryDrafts);
-    return () => window.removeEventListener("online", retryDrafts);
+    window.addEventListener("online", recover);
+    return () => window.removeEventListener("online", recover);
   }, []);
+
+  // ...but don't trust that event: while offline, poll faster to auto-recover
+  useEffect(() => {
+    if (!offline) return;
+    const iv = setInterval(recover, 3000);
+    return () => clearInterval(iv);
+  }, [offline]);
 
   const html = useMemo(() => marked.parse(content) as string, [content]);
   const visibleMemos = useMemo(() => {

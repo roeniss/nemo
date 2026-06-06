@@ -21,6 +21,11 @@ declare global {
   }
 }
 
+const TEMPS_KEY = "qm-temps"; // local-only memos not yet pushed to the server
+const LIST_CACHE = "qm-memos"; // cached server list for offline viewing
+const SAVE_DEBOUNCE = 300; // save this long after the last keystroke (idle)
+const SAVE_MAX_WAIT = 2000; // ...but at least this often during continuous typing
+
 async function api(path: string, init?: RequestInit) {
   const res = await fetch(`/api${path}`, {
     ...init,
@@ -28,6 +33,22 @@ async function api(path: string, init?: RequestInit) {
   });
   return res;
 }
+
+function titleFrom(content: string): string {
+  const line = content.split("\n").find((l) => l.trim()) ?? "";
+  return line.replace(/^#+\s*/, "").trim().slice(0, 120) || "Untitled";
+}
+function readList(key: string): MemoMeta[] {
+  try {
+    return JSON.parse(localStorage.getItem(key) || "[]");
+  } catch {
+    return [];
+  }
+}
+function writeList(key: string, v: MemoMeta[]) {
+  localStorage.setItem(key, JSON.stringify(v));
+}
+const byRecent = (a: MemoMeta, b: MemoMeta) => b.updated_at - a.updated_at;
 
 export default function App() {
   // optimistic: render immediately based on last-known auth (httpOnly cookie
@@ -49,10 +70,14 @@ export default function App() {
   const freshIds = useRef<Set<number>>(new Set());
   const [currentId, setCurrentId] = useState<number | null>(null);
   const [content, setContent] = useState("");
-  const [sidebar, setSidebar] = useState(true);
+  const [sidebar, setSidebar] = useState(() => window.innerWidth > 640); // closed by default on mobile
   const [saving, setSaving] = useState(false);
   const [offline, setOffline] = useState(false);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const lastSaveAt = useRef(0); // for the max-wait save guarantee
+  const inFlight = useRef(false); // one server save at a time (avoids self-conflict)
+  const pendingSave = useRef<{ id: number; value: string } | null>(null);
+  const materializing = useRef(false); // guard against double-pushing temp memos
   // latest values for the beforeunload handler (avoids stale closure)
   const contentRef = useRef(content);
   contentRef.current = content;
@@ -61,20 +86,31 @@ export default function App() {
 
   // background auth check + list — UI is already on screen; this fills it in
   useEffect(() => {
-    api("/memos").then(async (r) => {
-      if (r.status === 401) {
-        localStorage.removeItem("qm-authed");
-        setAuthed(false);
+    const temps = readList(TEMPS_KEY);
+    api("/memos")
+      .then(async (r) => {
+        if (r.status === 401) {
+          localStorage.removeItem("qm-authed");
+          setAuthed(false);
+          setLoading(false);
+          return;
+        }
+        localStorage.setItem("qm-authed", "1");
+        setAuthed(true);
+        const list = (await r.json()) as MemoMeta[];
+        writeList(LIST_CACHE, list);
+        const merged = [...temps, ...list].sort(byRecent);
+        setMemos(merged);
         setLoading(false);
-        return;
-      }
-      localStorage.setItem("qm-authed", "1");
-      setAuthed(true);
-      const list = (await r.json()) as MemoMeta[];
-      setMemos(list);
-      setLoading(false);
-      if (list.length) openMemo(list[0].id);
-    }).catch(() => setLoading(false)); // offline: render the cached shell
+        materializeTemps();
+        if (merged.length) openMemo(merged[0].id);
+      })
+      .catch(() => {
+        // offline — render cached list + local temps so the app is usable
+        setMemos([...temps, ...readList(LIST_CACHE)].sort(byRecent));
+        setOffline(true);
+        setLoading(false);
+      });
   }, []);
 
   async function login(
@@ -125,10 +161,16 @@ export default function App() {
         timer.current = null;
       }
       freshIds.current.delete(id);
-      try {
-        await api(`/memos/${id}?purge=1`, { method: "DELETE" });
-      } catch {
-        // offline — leave the empty row; it can be cleaned up later
+      if (id < 0) {
+        // unsynced empty temp — drop it locally
+        writeList(TEMPS_KEY, readList(TEMPS_KEY).filter((t) => t.id !== id));
+        localStorage.removeItem(DRAFT + id);
+      } else {
+        try {
+          await api(`/memos/${id}?purge=1`, { method: "DELETE" });
+        } catch {
+          // offline — leave the empty row; it can be cleaned up later
+        }
       }
       setMemos((ms) => ms.filter((x) => x.id !== id));
       return;
@@ -140,17 +182,32 @@ export default function App() {
     await leaveCurrent();
     conflictRef.current = false;
     setConflict(false);
-    const memo = (await (await api(`/memos/${id}`)).json()) as Memo;
-    setCurrentId(memo.id);
-    const draft = localStorage.getItem(DRAFT + id);
-    if (draft != null && draft !== memo.content) {
-      // unsynced local edit from a previous failed save — keep it and retry push
-      setContent(draft);
-      loadedAt.current = memo.updated_at;
-      save(memo.id, draft);
-    } else {
-      setContent(memo.content);
-      loadedAt.current = memo.updated_at;
+    lastSaveAt.current = Date.now();
+    if (id < 0) {
+      // local temp memo — content lives in localStorage
+      setCurrentId(id);
+      setContent(localStorage.getItem(DRAFT + id) ?? "");
+      loadedAt.current = readList(TEMPS_KEY).find((x) => x.id === id)?.updated_at ?? Date.now();
+      return;
+    }
+    try {
+      const memo = (await (await api(`/memos/${id}`)).json()) as Memo;
+      setCurrentId(memo.id);
+      const draft = localStorage.getItem(DRAFT + id);
+      if (draft != null && draft !== memo.content) {
+        // unsynced local edit from a previous failed save — keep it and retry push
+        setContent(draft);
+        loadedAt.current = memo.updated_at;
+        save(memo.id, draft);
+      } else {
+        setContent(memo.content);
+        loadedAt.current = memo.updated_at;
+      }
+    } catch {
+      // offline — fall back to the local draft if we have one
+      setCurrentId(id);
+      setContent(localStorage.getItem(DRAFT + id) ?? "");
+      setOffline(true);
     }
   }
 
@@ -158,17 +215,80 @@ export default function App() {
     await leaveCurrent();
     conflictRef.current = false;
     setConflict(false);
-    const memo = (await (await api("/memos", { method: "POST" })).json()) as Memo;
-    setMemos((m) => [{ id: memo.id, title: memo.title, updated_at: memo.updated_at }, ...m]);
-    setCurrentId(memo.id);
-    setContent("");
-    loadedAt.current = memo.updated_at;
-    freshIds.current.add(memo.id);
+    lastSaveAt.current = Date.now();
+    try {
+      const memo = (await (await api("/memos", { method: "POST" })).json()) as Memo;
+      setMemos((m) => [{ id: memo.id, title: memo.title, updated_at: memo.updated_at }, ...m]);
+      setCurrentId(memo.id);
+      setContent("");
+      loadedAt.current = memo.updated_at;
+      freshIds.current.add(memo.id);
+    } catch {
+      // offline — create a local temp memo (negative id) that syncs on reconnect
+      const id = -Date.now();
+      const meta = { id, title: "Untitled", updated_at: Date.now() };
+      writeList(TEMPS_KEY, [meta, ...readList(TEMPS_KEY)]);
+      localStorage.setItem(DRAFT + id, "");
+      setMemos((m) => [meta, ...m]);
+      setCurrentId(id);
+      setContent("");
+      loadedAt.current = meta.updated_at;
+      freshIds.current.add(id);
+      setOffline(true);
+    }
+  }
+
+  // push local temp memos to the server (on reconnect / focus / poll)
+  async function materializeTemps() {
+    if (!navigator.onLine || materializing.current) return;
+    materializing.current = true;
+    try {
+      for (const t of readList(TEMPS_KEY)) {
+        const body = localStorage.getItem(DRAFT + t.id) ?? "";
+        if (body.trim() === "") continue; // skip empties (purged or filled later)
+        try {
+          const memo = (await (await api("/memos", { method: "POST" })).json()) as Memo;
+          await api(`/memos/${memo.id}`, {
+            method: "PUT",
+            body: JSON.stringify({ content: body }),
+          });
+          writeList(TEMPS_KEY, readList(TEMPS_KEY).filter((x) => x.id !== t.id));
+          localStorage.removeItem(DRAFT + t.id);
+          const real = { id: memo.id, title: titleFrom(body), updated_at: Date.now() };
+          setMemos((m) =>
+            [real, ...m.filter((x) => x.id !== t.id && x.id !== memo.id)].sort(byRecent)
+          );
+          if (currentIdRef.current === t.id) {
+            setCurrentId(memo.id);
+            loadedAt.current = real.updated_at;
+          }
+        } catch {
+          break; // still offline — try again later
+        }
+      }
+    } finally {
+      materializing.current = false;
+    }
   }
 
   async function deleteMemo(id: number) {
     const m = memos.find((x) => x.id === id);
-    await api(`/memos/${id}`, { method: "DELETE" });
+    if (id < 0) {
+      // unsynced temp — drop locally, nothing to trash/undo
+      writeList(TEMPS_KEY, readList(TEMPS_KEY).filter((t) => t.id !== id));
+      localStorage.removeItem(DRAFT + id);
+      setMemos((ms) => ms.filter((x) => x.id !== id));
+      if (currentId === id) {
+        setCurrentId(null);
+        setContent("");
+      }
+      return;
+    }
+    try {
+      await api(`/memos/${id}`, { method: "DELETE" });
+    } catch {
+      setOffline(true);
+    }
     setMemos((ms) => ms.filter((x) => x.id !== id));
     if (currentId === id) {
       setCurrentId(null);
@@ -206,18 +326,45 @@ export default function App() {
     if (conflictRef.current) return; // resolve the conflict first; don't autosave
     if (timer.current) clearTimeout(timer.current);
     setSaving(true);
-    timer.current = setTimeout(() => save(currentId, value), 300);
+    // debounce on idle, but cap so a save still happens at least every SAVE_MAX_WAIT
+    // even while typing non-stop
+    const since = Date.now() - lastSaveAt.current;
+    const delay = Math.max(0, Math.min(SAVE_DEBOUNCE, SAVE_MAX_WAIT - since));
+    timer.current = setTimeout(() => save(currentId, value), delay);
   }
 
   async function save(id: number, value: string) {
     if (value.trim()) freshIds.current.delete(id); // now has content — keep it
+    localStorage.setItem(DRAFT + id, value); // local-first
+
+    if (id < 0) {
+      // temp memo — local only, never hits the server until materialized
+      const title = titleFrom(value);
+      const now = Date.now();
+      writeList(TEMPS_KEY, readList(TEMPS_KEY).map((t) => (t.id === id ? { ...t, title, updated_at: now } : t)));
+      setMemos((m) => m.map((x) => (x.id === id ? { ...x, title, updated_at: now } : x)));
+      if (id === currentIdRef.current) {
+        loadedAt.current = now;
+        lastSaveAt.current = now;
+      }
+      setSaving(false);
+      return;
+    }
+
+    // serialize server saves: a second save while one is in flight would send a
+    // stale base and the server would flag our own prior write as a conflict
+    if (inFlight.current) {
+      pendingSave.current = { id, value };
+      return;
+    }
+    inFlight.current = true;
     try {
       const r = await api(`/memos/${id}`, {
         method: "PUT",
         body: JSON.stringify({ content: value, base: loadedAt.current }),
       });
       if (r.status === 409) {
-        // changed in another session — stop autosaving, let the user choose
+        // genuinely changed in another session — let the user choose
         conflictRef.current = true;
         setConflict(true);
         setSaving(false);
@@ -226,25 +373,32 @@ export default function App() {
       const { title, updated_at } = (await r.json()) as { title: string; updated_at: number };
       localStorage.removeItem(DRAFT + id); // synced — drop the local draft
       setOffline(false);
-      setMemos((m) =>
-        [{ id, title, updated_at }, ...m.filter((x) => x.id !== id)].sort(
-          (a, b) => b.updated_at - a.updated_at
-        )
-      );
-      if (id === currentIdRef.current) loadedAt.current = updated_at;
+      setMemos((m) => [{ id, title, updated_at }, ...m.filter((x) => x.id !== id)].sort(byRecent));
+      if (id === currentIdRef.current) {
+        loadedAt.current = updated_at;
+        lastSaveAt.current = Date.now();
+      }
       setSaving(false);
     } catch {
       // network failure — the draft in localStorage is the safety net; retry later
       setOffline(true);
       setSaving(false);
+    } finally {
+      inFlight.current = false;
+      if (pendingSave.current) {
+        const p = pendingSave.current;
+        pendingSave.current = null;
+        save(p.id, p.value); // now uses the freshly-updated base
+      }
     }
   }
 
-  // push any unsynced draft for the current memo (on reconnect / focus / poll)
+  // push any unsynced work (temp memos + current draft) when back online
   async function retryDrafts() {
     if (!navigator.onLine || conflictRef.current) return;
+    await materializeTemps();
     const id = currentIdRef.current;
-    if (id == null) return;
+    if (id == null || id < 0) return; // temp handled by materializeTemps
     const d = localStorage.getItem(DRAFT + id);
     if (d != null) await save(id, d);
   }
@@ -280,13 +434,14 @@ export default function App() {
     if (!authed) return;
     async function sync() {
       if (document.hidden) return;
-      retryDrafts(); // push any unsynced offline edits
+      retryDrafts(); // push any unsynced offline edits / temp memos
       const r = await api("/memos").catch(() => null);
       if (!r || !r.ok) return;
       const list = (await r.json()) as MemoMeta[];
-      setMemos(list);
+      writeList(LIST_CACHE, list);
+      setMemos([...readList(TEMPS_KEY), ...list].sort(byRecent)); // keep local temps visible
       const id = currentIdRef.current;
-      if (id == null || timer.current != null || conflictRef.current) return; // skip mid-edit / conflict
+      if (id == null || id < 0 || timer.current != null || conflictRef.current) return; // skip temp / mid-edit / conflict
       if (localStorage.getItem(DRAFT + id) != null) return; // unsynced local draft pending
       const cur = list.find((x) => x.id === id);
       if (cur && cur.updated_at > loadedAt.current) {
@@ -331,7 +486,7 @@ export default function App() {
   useEffect(() => {
     function onUnload() {
       const id = currentIdRef.current;
-      if (id == null) return;
+      if (id == null || id < 0) return; // temp memos already live in localStorage
       if (freshIds.current.has(id) && contentRef.current.trim() === "") {
         fetch(`/api/memos/${id}?purge=1`, { method: "DELETE", keepalive: true });
       } else if (timer.current) {

@@ -60,6 +60,13 @@ input {
 .turnstile {
   min-height: 65px;
 }
+.login button[type="submit"] {
+  background: #1a1a1a;
+  color: #fff;
+  border-color: #1a1a1a;
+  padding: 9px;
+  font-weight: 600;
+}
 
 /* layout */
 .app {

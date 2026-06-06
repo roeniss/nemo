@@ -204,35 +204,38 @@ export default function App() {
     conflictRef.current = false;
     setConflict(false);
     lastSaveAt.current = Date.now();
-    if (id < 0) {
-      // local temp memo — content lives in localStorage
-      setCurrentId(id);
-      setContent(localStorage.getItem(DRAFT + id) ?? "");
-      loadedAt.current = readList(TEMPS_KEY).find((x) => x.id === id)?.updated_at ?? Date.now();
-      return;
-    }
+    setCurrentId(id);
+
+    // stale-while-revalidate: show local content INSTANTLY (no network wait),
+    // draft beats cache; then revalidate against the server in the background
+    const draft = localStorage.getItem(DRAFT + id);
+    const local = draft ?? (id < 0 ? "" : localStorage.getItem(CONTENT_CACHE + id) ?? "");
+    setContent(local);
+    loadedAt.current =
+      (id < 0 ? readList(TEMPS_KEY) : readList(LIST_CACHE)).find((m) => m.id === id)?.updated_at ??
+      0;
+
+    if (id < 0) return; // temp memo — purely local
+
     try {
-      const memo = (await (await api(`/memos/${id}`)).json()) as Memo;
-      localStorage.setItem(CONTENT_CACHE + id, memo.content); // cache for offline read
-      setCurrentId(memo.id);
-      const draft = localStorage.getItem(DRAFT + id);
-      if (draft != null && draft !== memo.content) {
-        // unsynced local edit from a previous failed save — keep it and retry push
-        setContent(draft);
+      const r = await api(`/memos/${id}`);
+      if (!r.ok || currentIdRef.current !== id) return; // 404 / user moved on
+      const memo = (await r.json()) as Memo;
+      localStorage.setItem(CONTENT_CACHE + id, memo.content);
+      const d = localStorage.getItem(DRAFT + id);
+      if (d != null && d !== memo.content) {
+        // unsynced local edit — keep it and push
         loadedAt.current = memo.updated_at;
-        save(memo.id, draft);
+        save(id, d);
       } else {
-        setContent(memo.content);
+        // adopt server content only if it changed and the user isn't mid-edit
+        if (timer.current == null && d == null && memo.content !== local) {
+          setContent(memo.content);
+        }
         loadedAt.current = memo.updated_at;
       }
     } catch {
-      // offline — fall back to local draft, else last-cached server content
-      setCurrentId(id);
-      setContent(
-        localStorage.getItem(DRAFT + id) ?? localStorage.getItem(CONTENT_CACHE + id) ?? ""
-      );
-      loadedAt.current = readList(LIST_CACHE).find((m) => m.id === id)?.updated_at ?? 0;
-      setOffline(true);
+      setOffline(true); // offline — keep the instantly-shown local content
     }
   }
 

@@ -13,7 +13,7 @@ A minimal velog-style markdown memo app — left editor / right preview. Single 
 npm install
 
 # Create the D1 database (once) → put the printed database_id into wrangler.jsonc
-npx wrangler d1 create quick-memo-db
+npx wrangler d1 create nemo-db
 
 # Apply the schema (local)
 npm run db:local
@@ -67,8 +67,8 @@ or export needed. If memos are lost or corrupted, restore the database:
 
 ```bash
 # see available restore points (bookmarks)
-npx wrangler d1 time-travel info quick-memo-db --remote
+npx wrangler d1 time-travel info nemo-db --remote
 
 # restore to a timestamp or bookmark
-npx wrangler d1 time-travel restore quick-memo-db --remote --timestamp="2026-06-05T00:00:00Z"
+npx wrangler d1 time-travel restore nemo-db --remote --timestamp="2026-06-05T00:00:00Z"
 ```

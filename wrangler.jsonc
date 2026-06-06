@@ -13,8 +13,8 @@
   "d1_databases": [
     {
       "binding": "DB",
-      "database_name": "quick-memo-db",
-      "database_id": "a7ec2720-1e24-4ac3-a7b9-9f2b3f103b7e"
+      "database_name": "nemo-db",
+      "database_id": "ce8a1267-e854-43d9-8050-dab4bf33b8b9"
     }
   ],
   "routes": [

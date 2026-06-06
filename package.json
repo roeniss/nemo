@@ -9,8 +9,8 @@
     "deploy": "vite build && wrangler deploy",
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
-    "db:local": "wrangler d1 execute quick-memo-db --local --file=./schema.sql",
-    "db:remote": "wrangler d1 execute quick-memo-db --remote --file=./schema.sql"
+    "db:local": "wrangler d1 execute nemo-db --local --file=./schema.sql",
+    "db:remote": "wrangler d1 execute nemo-db --remote --file=./schema.sql"
   },
   "dependencies": {
     "dompurify": "^3.4.8",

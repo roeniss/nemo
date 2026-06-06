@@ -9,6 +9,7 @@ type Memo = MemoMeta & { content: string; created_at: number };
 type LoginResult = { ok: boolean; status?: number };
 
 const DRAFT = "qm-draft-"; // localStorage key prefix for unsynced edits
+const CONTENT_CACHE = "qm-cache-"; // last-seen server content per memo (offline read)
 // public site key (build-time). Empty = widget dormant until keys are configured.
 const TURNSTILE_SITEKEY = import.meta.env.VITE_TURNSTILE_SITEKEY || "";
 
@@ -114,11 +115,13 @@ export default function App() {
         setMemos(merged);
         setOffline(true);
         setLoading(false);
-        // restore the in-progress memo if we have its content locally (draft/temp)
+        // restore the last-open memo if we have its content locally
         if (
           want &&
           merged.some((m) => m.id === want) &&
-          (want < 0 || localStorage.getItem(DRAFT + want) != null)
+          (want < 0 ||
+            localStorage.getItem(DRAFT + want) != null ||
+            localStorage.getItem(CONTENT_CACHE + want) != null)
         ) {
           openMemo(want);
         }
@@ -210,6 +213,7 @@ export default function App() {
     }
     try {
       const memo = (await (await api(`/memos/${id}`)).json()) as Memo;
+      localStorage.setItem(CONTENT_CACHE + id, memo.content); // cache for offline read
       setCurrentId(memo.id);
       const draft = localStorage.getItem(DRAFT + id);
       if (draft != null && draft !== memo.content) {
@@ -222,9 +226,12 @@ export default function App() {
         loadedAt.current = memo.updated_at;
       }
     } catch {
-      // offline — fall back to the local draft if we have one
+      // offline — fall back to local draft, else last-cached server content
       setCurrentId(id);
-      setContent(localStorage.getItem(DRAFT + id) ?? "");
+      setContent(
+        localStorage.getItem(DRAFT + id) ?? localStorage.getItem(CONTENT_CACHE + id) ?? ""
+      );
+      loadedAt.current = readList(LIST_CACHE).find((m) => m.id === id)?.updated_at ?? 0;
       setOffline(true);
     }
   }
@@ -272,6 +279,7 @@ export default function App() {
           });
           writeList(TEMPS_KEY, readList(TEMPS_KEY).filter((x) => x.id !== t.id));
           localStorage.removeItem(DRAFT + t.id);
+          localStorage.setItem(CONTENT_CACHE + memo.id, body); // cache for offline read
           const real = { id: memo.id, title: titleFrom(body), updated_at: Date.now() };
           setMemos((m) =>
             [real, ...m.filter((x) => x.id !== t.id && x.id !== memo.id)].sort(byRecent)
@@ -307,6 +315,8 @@ export default function App() {
     } catch {
       setOffline(true);
     }
+    localStorage.removeItem(CONTENT_CACHE + id);
+    localStorage.removeItem(DRAFT + id);
     setMemos((ms) => ms.filter((x) => x.id !== id));
     if (currentId === id) {
       setCurrentId(null);
@@ -390,6 +400,7 @@ export default function App() {
       }
       const { title, updated_at } = (await r.json()) as { title: string; updated_at: number };
       localStorage.removeItem(DRAFT + id); // synced — drop the local draft
+      localStorage.setItem(CONTENT_CACHE + id, value); // cache for offline read
       setOffline(false);
       setMemos((m) => [{ id, title, updated_at }, ...m.filter((x) => x.id !== id)].sort(byRecent));
       if (id === currentIdRef.current) {
@@ -477,6 +488,7 @@ export default function App() {
       const cur = list.find((x) => x.id === id);
       if (cur && cur.updated_at > loadedAt.current) {
         const memo = (await (await api(`/memos/${id}`)).json()) as Memo;
+        localStorage.setItem(CONTENT_CACHE + id, memo.content);
         if (timer.current == null && currentIdRef.current === id) {
           setContent(memo.content);
           loadedAt.current = memo.updated_at;

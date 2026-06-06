@@ -4,7 +4,9 @@ A minimal velog-style markdown memo app — left editor / right preview. Single 
 
 ## Stack
 - **Deploy**: Cloudflare Worker + Static Assets, D1 (SQLite), domain `nemo.roeni.ss`
-- **Build**: Vite + Preact + TS, Hono API, `marked`, JWT cookie auth
+- **Build**: Vite + Preact + TS, Hono API, `marked` + DOMPurify, JWT cookie auth + Turnstile
+- **PWA**: installable, offline-capable (service worker + local-first storage)
+- **Security**: strict CSP + security headers (`public/_headers`), sanitized markdown
 
 ## Local development
 ```bash

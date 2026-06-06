@@ -697,7 +697,7 @@ function Login({
   return (
     <div className="center">
       <form className="login" onSubmit={submit}>
-        <h1>memo</h1>
+        <h1>nemo</h1>
         <input placeholder="id" value={u} onChange={(e) => setU(e.currentTarget.value)} autoFocus />
         <input
           type="password"

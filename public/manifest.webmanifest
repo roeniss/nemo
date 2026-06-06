@@ -1,6 +1,6 @@
 {
-  "name": "quick-memo",
-  "short_name": "memo",
+  "name": "nemo",
+  "short_name": "nemo",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",

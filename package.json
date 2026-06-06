@@ -13,6 +13,7 @@
     "db:remote": "wrangler d1 execute quick-memo-db --remote --file=./schema.sql"
   },
   "dependencies": {
+    "dompurify": "^3.4.8",
     "hono": "^4.6.14",
     "marked": "^18.0.5",
     "preact": "^10.29.2"

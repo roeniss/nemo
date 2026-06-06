@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { marked } from "marked";
+import DOMPurify from "dompurify";
 
 marked.setOptions({ gfm: true, breaks: true });
 
@@ -545,7 +546,7 @@ export default function App() {
     return () => clearInterval(iv);
   }, [offline]);
 
-  const html = useMemo(() => marked.parse(content) as string, [content]);
+  const html = useMemo(() => DOMPurify.sanitize(marked.parse(content) as string), [content]);
   const visibleMemos = useMemo(() => {
     const q = query.trim().toLowerCase();
     return q ? memos.filter((m) => m.title.toLowerCase().includes(q)) : memos;

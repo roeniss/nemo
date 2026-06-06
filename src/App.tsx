@@ -87,6 +87,7 @@ export default function App() {
   // background auth check + list — UI is already on screen; this fills it in
   useEffect(() => {
     const temps = readList(TEMPS_KEY);
+    const want = Number(localStorage.getItem("qm-current")); // restore last-open memo
     api("/memos")
       .then(async (r) => {
         if (r.status === 401) {
@@ -103,15 +104,30 @@ export default function App() {
         setMemos(merged);
         setLoading(false);
         materializeTemps();
-        if (merged.length) openMemo(merged[0].id);
+        const target = merged.some((m) => m.id === want) ? want : merged[0]?.id;
+        if (target != null) openMemo(target);
       })
       .catch(() => {
         // offline — render cached list + local temps so the app is usable
-        setMemos([...temps, ...readList(LIST_CACHE)].sort(byRecent));
+        const merged = [...temps, ...readList(LIST_CACHE)].sort(byRecent);
+        setMemos(merged);
         setOffline(true);
         setLoading(false);
+        // restore the in-progress memo if we have its content locally (draft/temp)
+        if (
+          want &&
+          merged.some((m) => m.id === want) &&
+          (want < 0 || localStorage.getItem(DRAFT + want) != null)
+        ) {
+          openMemo(want);
+        }
       });
   }, []);
+
+  // remember the open memo so a reload (incl. offline) restores it
+  useEffect(() => {
+    if (currentId != null) localStorage.setItem("qm-current", String(currentId));
+  }, [currentId]);
 
   async function login(
     username: string,
@@ -136,6 +152,7 @@ export default function App() {
     await leaveCurrent();
     await api("/logout", { method: "POST" });
     localStorage.removeItem("qm-authed");
+    localStorage.removeItem("qm-current");
     setAuthed(false);
     setMemos([]);
     setCurrentId(null);

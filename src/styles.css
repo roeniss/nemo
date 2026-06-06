@@ -11,6 +11,12 @@ body {
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
   color: #1a1a1a;
   background: #fff;
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+}
+html,
+body {
+  overflow-x: hidden;
 }
 button {
   font: inherit;
@@ -139,6 +145,10 @@ input {
   padding: 8px 10px;
   border-bottom: 1px solid #eee;
   font-size: 14px;
+  cursor: pointer;
+}
+.memo-list li.empty {
+  cursor: default;
 }
 .memo-list li.active {
   background: #ececec;
@@ -198,7 +208,7 @@ input {
   resize: none;
   padding: 20px;
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 14px;
+  font-size: 16px; /* >=16px avoids iOS zoom-on-focus */
   line-height: 1.6;
   border-right: 1px solid #e5e5e5;
 }

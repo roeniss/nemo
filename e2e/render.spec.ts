@@ -12,6 +12,15 @@ test.describe("markdown rendering + sanitization", () => {
     await expect(preview.locator("li")).toHaveCount(2);
   });
 
+  test("skips the live preview for very large documents", async ({ page }) => {
+    await blankMemo(page);
+    // ~250 KB of content (> PREVIEW_MAX 200 KB) → preview is skipped, not rendered
+    await page.fill(sel.editor, "# big\n\n" + "lorem ipsum ".repeat(22_000));
+    await expect(page.locator(".preview-skipped")).toBeVisible();
+    await expect(page.locator(".preview-skipped")).toContainText("미리보기 생략");
+    await expect(page.locator(".preview p")).toHaveCount(0); // nothing rendered
+  });
+
   test("neutralizes XSS in memo content (DOMPurify)", async ({ page }) => {
     await blankMemo(page);
     await page.fill(

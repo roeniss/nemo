@@ -79,6 +79,8 @@ export default function App() {
   const loadedAt = useRef(0); // updated_at of the currently open memo (for sync)
   const [conflict, setConflict] = useState(false);
   const conflictRef = useRef(false);
+  const [deleted, setDeleted] = useState(false); // open memo was trashed elsewhere
+  const deletedRef = useRef(false);
   // memos created this session that have never held content (auto-purged on leave)
   const freshIds = useRef<Set<number>>(new Set());
   const [currentId, setCurrentId] = useState<number | null>(null);
@@ -250,6 +252,8 @@ export default function App() {
     await leaveCurrent();
     conflictRef.current = false;
     setConflict(false);
+    deletedRef.current = false;
+    setDeleted(false);
     lastSaveAt.current = Date.now();
     setCurrentId(id);
 
@@ -291,6 +295,8 @@ export default function App() {
     await leaveCurrent();
     conflictRef.current = false;
     setConflict(false);
+    deletedRef.current = false;
+    setDeleted(false);
     lastSaveAt.current = Date.now();
     try {
       const memo = (await (await api("/memos", { method: "POST" })).json()) as Memo;
@@ -404,7 +410,7 @@ export default function App() {
     if (currentId == null) return;
     // local-first: persist to localStorage immediately, before any network call
     localStorage.setItem(DRAFT + currentId, value);
-    if (conflictRef.current) return; // resolve the conflict first; don't autosave
+    if (conflictRef.current || deletedRef.current) return; // resolve banner first; don't autosave
     if (timer.current) clearTimeout(timer.current);
     setSaving(true);
     // debounce on idle, but cap so a save still happens at least every SAVE_MAX_WAIT
@@ -451,6 +457,14 @@ export default function App() {
         setSaving(false);
         return;
       }
+      if (r.status === 404) {
+        // trashed in another session — DON'T drop the draft (returning early
+        // skips the removeItem below); let the user recover or discard it
+        deletedRef.current = true;
+        setDeleted(true);
+        setSaving(false);
+        return;
+      }
       const { title, updated_at } = (await r.json()) as { title: string; updated_at: number };
       localStorage.removeItem(DRAFT + id); // synced — drop the local draft
       localStorage.setItem(CONTENT_CACHE + id, value); // cache for offline read
@@ -479,7 +493,7 @@ export default function App() {
   // the moment the server is reachable again — independent of the flaky `online`
   // event / navigator.onLine, and even when there is no draft to push
   async function recover() {
-    if (conflictRef.current) return;
+    if (conflictRef.current || deletedRef.current) return;
     await materializeTemps();
     const id = currentIdRef.current;
     if (id != null && id > 0) {
@@ -522,6 +536,47 @@ export default function App() {
     loadedAt.current = updated_at;
   }
 
+  // memo was trashed elsewhere — save the on-screen content as a brand-new memo
+  async function recoverAsNew() {
+    const id = currentIdRef.current;
+    if (id == null) return;
+    const body = content;
+    deletedRef.current = false;
+    setDeleted(false);
+    // drop the orphaned (trashed) memo locally and create a fresh one
+    freshIds.current.delete(id);
+    localStorage.removeItem(DRAFT + id);
+    localStorage.removeItem(CONTENT_CACHE + id);
+    setMemos((ms) => ms.filter((x) => x.id !== id));
+    try {
+      const memo = (await (await api("/memos", { method: "POST" })).json()) as Memo;
+      const r = await api(`/memos/${memo.id}`, { method: "PUT", body: JSON.stringify({ content: body }) });
+      const { title, updated_at } = (await r.json()) as { title: string; updated_at: number };
+      localStorage.setItem(CONTENT_CACHE + memo.id, body);
+      setMemos((m) => [{ id: memo.id, title, updated_at }, ...m.filter((x) => x.id !== memo.id)].sort(byRecent));
+      setCurrentId(memo.id); // currentId → hash effect points the URL at the new memo
+      setContent(body);
+      loadedAt.current = updated_at;
+    } catch {
+      setOffline(true); // the draft for the new memo is the local safety net
+    }
+  }
+
+  // memo was trashed elsewhere and the user doesn't want it back — drop it
+  function discardDeleted() {
+    const id = currentIdRef.current;
+    deletedRef.current = false;
+    setDeleted(false);
+    if (id != null) {
+      freshIds.current.delete(id);
+      localStorage.removeItem(DRAFT + id);
+      localStorage.removeItem(CONTENT_CACHE + id);
+      setMemos((ms) => ms.filter((x) => x.id !== id));
+    }
+    setCurrentId(null); // currentId → hash effect clears the URL
+    setContent("");
+  }
+
   // periodic multi-session sync: refresh the list, and reload the open memo if
   // it was changed elsewhere (but never while the user has unsaved local edits)
   useEffect(() => {
@@ -536,7 +591,7 @@ export default function App() {
       writeList(LIST_CACHE, list);
       setMemos([...readList(TEMPS_KEY), ...list].sort(byRecent)); // keep local temps visible
       const id = currentIdRef.current;
-      if (id == null || id < 0 || timer.current != null || conflictRef.current) return; // skip temp / mid-edit / conflict
+      if (id == null || id < 0 || timer.current != null || conflictRef.current || deletedRef.current) return; // skip temp / mid-edit / conflict / deleted
       if (localStorage.getItem(DRAFT + id) != null) return; // unsynced local draft pending
       const cur = list.find((x) => x.id === id);
       if (cur && cur.updated_at > loadedAt.current) {
@@ -719,6 +774,14 @@ export default function App() {
             <span>This memo was changed in another session.</span>
             <button onClick={reloadCurrent}>Reload</button>
             <button onClick={overwrite}>Overwrite</button>
+          </div>
+        )}
+
+        {deleted && (
+          <div className="conflict">
+            <span>이 메모는 다른 곳에서 삭제되었습니다.</span>
+            <button onClick={recoverAsNew}>새 메모로 복구</button>
+            <button onClick={discardDeleted}>버리기</button>
           </div>
         )}
 

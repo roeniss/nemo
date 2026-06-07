@@ -41,17 +41,22 @@ test.describe("per-memo URL routing", () => {
     const b = uniq("BackB");
     const idA = await seedMemo(request, `# ${a}\n\naaa`);
     const idB = await seedMemo(request, `# ${b}\n\nbbb`);
+    // wait for the hash to register (hashchange → openMemo) before the content
+    const at = async (id: number, title: string, body: string) => {
+      await expect(page).toHaveURL(new RegExp(`#${id}$`));
+      await expect(page.locator(sel.editor)).toHaveValue(`# ${title}\n\n${body}`);
+    };
     try {
       await page.goto(`/#${idA}`);
-      await expect(page.locator(sel.editor)).toHaveValue(`# ${a}\n\naaa`);
+      await at(idA, a, "aaa");
       // navigate to B via its hash (pushes history)
       await page.locator(`.memo-title:text-is("${b}")`).click();
-      await expect(page.locator(sel.editor)).toHaveValue(`# ${b}\n\nbbb`);
+      await at(idB, b, "bbb");
 
       await page.goBack();
-      await expect(page.locator(sel.editor)).toHaveValue(`# ${a}\n\naaa`);
+      await at(idA, a, "aaa");
       await page.goForward();
-      await expect(page.locator(sel.editor)).toHaveValue(`# ${b}\n\nbbb`);
+      await at(idB, b, "bbb");
     } finally {
       await purge(request, idA);
       await purge(request, idB);

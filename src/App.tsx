@@ -417,7 +417,10 @@ export default function App() {
     // even while typing non-stop
     const since = Date.now() - lastSaveAt.current;
     const delay = Math.max(0, Math.min(SAVE_DEBOUNCE, SAVE_MAX_WAIT - since));
-    timer.current = setTimeout(() => save(currentId, value), delay);
+    timer.current = setTimeout(() => {
+      timer.current = null; // debounce fired — no edit pending (keeps the guard honest)
+      save(currentId, value);
+    }, delay);
   }
 
   async function save(id: number, value: string) {
@@ -601,6 +604,16 @@ export default function App() {
           setContent(memo.content);
           loadedAt.current = memo.updated_at;
         }
+      } else if (!cur) {
+        // the open memo dropped out of the list — it may have been trashed
+        // elsewhere, or this list just predates a memo we created. Confirm with
+        // a direct fetch (404 = really gone) before raising the banner, so a
+        // freshly-created memo isn't mistaken for a deleted one.
+        const probe = await api(`/memos/${id}`).catch(() => null);
+        if (probe && probe.status === 404 && currentIdRef.current === id && timer.current == null) {
+          deletedRef.current = true;
+          setDeleted(true);
+        }
       }
     }
     const iv = setInterval(sync, 10000);
@@ -619,6 +632,7 @@ export default function App() {
       if (k === "s") {
         e.preventDefault();
         if (timer.current) clearTimeout(timer.current);
+        timer.current = null;
         if (currentId != null) {
           setSaving(true);
           save(currentId, content);

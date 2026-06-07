@@ -17,6 +17,10 @@ test.describe("search", () => {
       await expect(page.locator(`.memo-title:text-is("${apple}")`)).toBeVisible();
       await expect(page.locator(`.memo-title:text-is("${banana}")`)).toHaveCount(0);
 
+      // case-insensitive
+      await page.fill(sel.search, apple.toUpperCase());
+      await expect(page.locator(`.memo-title:text-is("${apple}")`)).toBeVisible();
+
       await page.fill(sel.search, "zzz-no-such-title");
       await expect(page.locator(".memo-list li.empty")).toHaveText("No matches");
     } finally {

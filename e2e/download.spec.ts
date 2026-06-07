@@ -22,4 +22,21 @@ test.describe("download", () => {
       await purge(request, id);
     }
   });
+
+  test("sanitizes path-unsafe characters in the download filename", async ({ page, request }) => {
+    const body = `# a/b:c?d\n\nx`;
+    const id = await seedMemo(request, body);
+    try {
+      await page.goto(`/#${id}`);
+      await expect(page.locator(sel.editor)).toHaveValue(body);
+      const [download] = await Promise.all([
+        page.waitForEvent("download"),
+        page.locator(sel.downloadBtn).click(),
+      ]);
+      // / : ? are replaced with _
+      expect(download.suggestedFilename()).toBe("a_b_c_d.md");
+    } finally {
+      await purge(request, id);
+    }
+  });
 });

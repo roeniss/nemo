@@ -59,7 +59,11 @@ function readList(key: string): MemoMeta[] {
   }
 }
 function writeList(key: string, v: MemoMeta[]) {
-  localStorage.setItem(key, JSON.stringify(v));
+  try {
+    localStorage.setItem(key, JSON.stringify(v));
+  } catch {
+    // metadata cache is best-effort; never crash a save over it
+  }
 }
 const byRecent = (a: MemoMeta, b: MemoMeta) => b.updated_at - a.updated_at;
 
@@ -105,6 +109,7 @@ export default function App() {
   const noticeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   // a large file held back for confirmation before loading it into the body
   const [pendingImport, setPendingImport] = useState<{ text: string; name: string; size: number } | null>(null);
+  const quotaWarned = useRef(false); // dedupe the "localStorage full" toast
   // always-latest openMemo, so the hashchange listener (registered once) never
   // calls a stale closure
   const openMemoRef = useRef<(id: number) => void>(() => {});
@@ -278,7 +283,7 @@ export default function App() {
       const r = await api(`/memos/${id}`);
       if (!r.ok || currentIdRef.current !== id) return; // 404 / user moved on
       const memo = (await r.json()) as Memo;
-      localStorage.setItem(CONTENT_CACHE + id, memo.content);
+      safeSet(CONTENT_CACHE + id, memo.content);
       const d = localStorage.getItem(DRAFT + id);
       if (d != null && d !== memo.content) {
         // unsynced local edit — keep it and push
@@ -345,7 +350,7 @@ export default function App() {
           });
           writeList(TEMPS_KEY, readList(TEMPS_KEY).filter((x) => x.id !== t.id));
           localStorage.removeItem(DRAFT + t.id);
-          localStorage.setItem(CONTENT_CACHE + memo.id, body); // cache for offline read
+          safeSet(CONTENT_CACHE + memo.id, body); // cache for offline read
           const real = { id: memo.id, title: titleFrom(body), updated_at: Date.now() };
           setMemos((m) =>
             [real, ...m.filter((x) => x.id !== t.id && x.id !== memo.id)].sort(byRecent)
@@ -423,7 +428,7 @@ export default function App() {
     setContent(value);
     if (currentId == null) return;
     // local-first: persist to localStorage immediately, before any network call
-    localStorage.setItem(DRAFT + currentId, value);
+    safeSet(DRAFT + currentId, value);
     if (conflictRef.current || deletedRef.current) return; // resolve banner first; don't autosave
     if (timer.current) clearTimeout(timer.current);
     setSaving(true);
@@ -442,6 +447,44 @@ export default function App() {
     setNotice(msg);
     if (noticeTimer.current) clearTimeout(noticeTimer.current);
     noticeTimer.current = setTimeout(() => setNotice(null), 3000);
+  }
+
+  // free localStorage space by dropping content caches — these are disposable
+  // (the server holds the original; they only speed up offline reads). Never
+  // touches qm-draft-* (unsynced edits) or the list/temp metadata.
+  function evictCaches(keep?: string): number {
+    const drop: string[] = [];
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i);
+      if (k && k.startsWith(CONTENT_CACHE) && k !== keep) drop.push(k);
+    }
+    drop.forEach((k) => localStorage.removeItem(k));
+    return drop.length;
+  }
+
+  // localStorage.setItem that survives QuotaExceededError: evict disposable
+  // caches and retry once; if it still won't fit (the value itself is too big),
+  // give up gracefully — the content stays in memory and still saves to the
+  // server, so nothing is lost while online.
+  function safeSet(key: string, value: string): boolean {
+    try {
+      localStorage.setItem(key, value);
+      quotaWarned.current = false;
+      return true;
+    } catch {
+      evictCaches(CONTENT_CACHE + currentIdRef.current); // keep the open memo's cache
+      try {
+        localStorage.setItem(key, value);
+        quotaWarned.current = false;
+        return true;
+      } catch {
+        if (!quotaWarned.current) {
+          quotaWarned.current = true;
+          flash("로컬 저장 공간이 가득 찼어요 — 서버에는 저장됩니다.");
+        }
+        return false;
+      }
+    }
   }
 
   // known text file extensions — used alongside the MIME type and a NUL-byte
@@ -533,7 +576,7 @@ export default function App() {
 
   async function save(id: number, value: string) {
     if (!isBlank(value)) freshIds.current.delete(id); // now has content — keep it
-    localStorage.setItem(DRAFT + id, value); // local-first
+    safeSet(DRAFT + id, value); // local-first
 
     if (id < 0) {
       // temp memo — local only, never hits the server until materialized
@@ -578,7 +621,7 @@ export default function App() {
       }
       const { title, updated_at } = (await r.json()) as { title: string; updated_at: number };
       localStorage.removeItem(DRAFT + id); // synced — drop the local draft
-      localStorage.setItem(CONTENT_CACHE + id, value); // cache for offline read
+      safeSet(CONTENT_CACHE + id, value); // cache for offline read
       setOffline(false);
       setMemos((m) => [{ id, title, updated_at }, ...m.filter((x) => x.id !== id)].sort(byRecent));
       if (id === currentIdRef.current) {
@@ -663,7 +706,7 @@ export default function App() {
       const memo = (await (await api("/memos", { method: "POST" })).json()) as Memo;
       const r = await api(`/memos/${memo.id}`, { method: "PUT", body: JSON.stringify({ content: body }) });
       const { title, updated_at } = (await r.json()) as { title: string; updated_at: number };
-      localStorage.setItem(CONTENT_CACHE + memo.id, body);
+      safeSet(CONTENT_CACHE + memo.id, body);
       setMemos((m) => [{ id: memo.id, title, updated_at }, ...m.filter((x) => x.id !== memo.id)].sort(byRecent));
       setCurrentId(memo.id); // currentId → hash effect points the URL at the new memo
       setContent(body);
@@ -707,7 +750,7 @@ export default function App() {
       const cur = list.find((x) => x.id === id);
       if (cur && cur.updated_at > loadedAt.current) {
         const memo = (await (await api(`/memos/${id}`)).json()) as Memo;
-        localStorage.setItem(CONTENT_CACHE + id, memo.content);
+        safeSet(CONTENT_CACHE + id, memo.content);
         if (timer.current == null && currentIdRef.current === id) {
           setContent(memo.content);
           loadedAt.current = memo.updated_at;

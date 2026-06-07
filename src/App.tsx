@@ -1,16 +1,27 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { marked } from "marked";
-import DOMPurify from "dompurify";
 import { kv, hydrate } from "./idb";
+import {
+  type MemoMeta,
+  type Memo,
+  type LoginResult,
+  DRAFT,
+  CONTENT_CACHE,
+  TEMPS_KEY,
+  LIST_CACHE,
+  NEW_DOC,
+  SAVE_DEBOUNCE,
+  SAVE_MAX_WAIT,
+  api,
+  titleFrom,
+  isBlank,
+  hashId,
+  readList,
+  writeList,
+  byRecent,
+} from "./lib";
+import { useToast, usePreview } from "./hooks";
+import { useImport } from "./useImport";
 
-marked.setOptions({ gfm: true, breaks: true });
-
-type MemoMeta = { id: number; title: string; updated_at: number };
-type Memo = MemoMeta & { content: string; created_at: number };
-type LoginResult = { ok: boolean; status?: number };
-
-const DRAFT = "qm-draft-"; // localStorage key prefix for unsynced edits
-const CONTENT_CACHE = "qm-cache-"; // last-seen server content per memo (offline read)
 // public site key (build-time). Empty = widget dormant until keys are configured.
 const TURNSTILE_SITEKEY = import.meta.env.VITE_TURNSTILE_SITEKEY || "";
 
@@ -30,52 +41,6 @@ declare global {
 const SYNC_MS = typeof window !== "undefined" && typeof window.__NEMO_SYNC_MS__ === "number"
   ? window.__NEMO_SYNC_MS__
   : 10_000;
-
-const TEMPS_KEY = "qm-temps"; // local-only memos not yet pushed to the server
-const LIST_CACHE = "qm-memos"; // cached server list for offline viewing
-const NEW_DOC = "# "; // every new memo opens with the title heading ready to type
-const PREVIEW_DEBOUNCE = 200; // recompute the rendered preview this long after a keystroke
-const PREVIEW_MAX = 200_000; // skip live preview above this size (too heavy to render per edit)
-const SAVE_DEBOUNCE = 300; // save this long after the last keystroke (idle)
-const SAVE_MAX_WAIT = 2000; // ...but at least this often during continuous typing
-
-async function api(path: string, init?: RequestInit) {
-  const res = await fetch(`/api${path}`, {
-    ...init,
-    headers: { "content-type": "application/json", ...(init?.headers ?? {}) },
-  });
-  return res;
-}
-
-function titleFrom(content: string): string {
-  const line = content.split("\n").find((l) => l.trim()) ?? "";
-  return line.replace(/^#+\s*/, "").trim().slice(0, 120) || "Untitled";
-}
-// a memo holding only a heading marker (the "# " we prefill) counts as empty,
-// so an untouched new memo is still auto-purged on leave
-const isBlank = (content: string) => content.replace(/^#+\s*/, "").trim() === "";
-// memo id encoded in the URL hash (#123 / #-123 for temps); null when absent
-function hashId(): number | null {
-  const h = location.hash.replace(/^#/, "");
-  if (!h) return null;
-  const n = Number(h);
-  return Number.isInteger(n) && n !== 0 ? n : null;
-}
-function readList(key: string): MemoMeta[] {
-  try {
-    return JSON.parse(localStorage.getItem(key) || "[]");
-  } catch {
-    return [];
-  }
-}
-function writeList(key: string, v: MemoMeta[]) {
-  try {
-    localStorage.setItem(key, JSON.stringify(v));
-  } catch {
-    // metadata cache is best-effort; never crash a save over it
-  }
-}
-const byRecent = (a: MemoMeta, b: MemoMeta) => b.updated_at - a.updated_at;
 
 export default function App() {
   // optimistic: render immediately based on last-known auth (httpOnly cookie
@@ -115,10 +80,10 @@ export default function App() {
   const editorRef = useRef<HTMLTextAreaElement>(null);
   const focusOnOpen = useRef(false); // focus the editor after the next new memo opens
   const fileRef = useRef<HTMLInputElement>(null); // hidden file picker for text import
-  const [notice, setNotice] = useState<string | null>(null); // transient toast (import status)
-  const noticeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  // a large file held back for confirmation before loading it into the body
-  const [pendingImport, setPendingImport] = useState<{ text: string; name: string; size: number } | null>(null);
+  const { notice, flash } = useToast();
+  // text import (picker + drag-drop, large-file confirm) and .md export
+  const { pendingImport, importFile, confirmImport, cancelImport, downloadMemo, resetImport } =
+    useImport({ content, currentIdRef, editorRef, onEdit, flash });
   // always-latest openMemo, so the hashchange listener (registered once) never
   // calls a stale closure
   const openMemoRef = useRef<(id: number) => void>(() => {});
@@ -282,7 +247,7 @@ export default function App() {
     setConflict(false);
     deletedRef.current = false;
     setDeleted(false);
-    setPendingImport(null);
+    resetImport();
     lastSaveAt.current = Date.now();
     setCurrentId(id);
 
@@ -326,7 +291,7 @@ export default function App() {
     setConflict(false);
     deletedRef.current = false;
     setDeleted(false);
-    setPendingImport(null);
+    resetImport();
     lastSaveAt.current = Date.now();
     try {
       const memo = (await (await api("/memos", { method: "POST" })).json()) as Memo;
@@ -458,100 +423,6 @@ export default function App() {
       timer.current = null; // debounce fired — no edit pending (keeps the guard honest)
       save(currentId, value);
     }, delay);
-  }
-
-  // brief bottom toast, auto-dismissed
-  function flash(msg: string) {
-    setNotice(msg);
-    if (noticeTimer.current) clearTimeout(noticeTimer.current);
-    noticeTimer.current = setTimeout(() => setNotice(null), 3000);
-  }
-
-  // known text file extensions — used alongside the MIME type and a NUL-byte
-  // sniff to keep binaries out
-  const TEXT_EXT =
-    /\.(txt|text|md|markdown|mdown|csv|tsv|json|jsonc|log|ya?ml|toml|ini|conf|env|xml|html?|css|scss|js|mjs|cjs|jsx|ts|tsx|py|rb|go|rs|c|h|cc|cpp|hpp|java|kt|swift|php|sh|bash|zsh|sql|svg|diff|patch|gitignore)$/i;
-
-  const IMPORT_CONFIRM_BYTES = 100 * 1024; // ask before loading a file this big into the body
-
-  // import a text file into the current memo. Files over IMPORT_CONFIRM_BYTES are
-  // held back behind a confirmation banner first (pendingImport → confirmImport).
-  async function importFile(file: File | null | undefined) {
-    if (!file) return;
-    const looksText =
-      file.type.startsWith("text/") ||
-      file.type === "application/json" ||
-      file.type === "image/svg+xml" ||
-      file.type === "" || // many text files report no MIME
-      TEXT_EXT.test(file.name);
-    let text: string;
-    try {
-      text = await file.text();
-    } catch {
-      flash("파일을 읽지 못했어요.");
-      return;
-    }
-    if (!looksText || text.includes("\u0000")) {
-      flash("텍스트 파일만 업로드할 수 있어요.");
-      return;
-    }
-    if (currentIdRef.current == null) return; // a memo is always open (new-doc default)
-    if (file.size > IMPORT_CONFIRM_BYTES) {
-      setPendingImport({ text, name: file.name, size: file.size }); // confirm before loading
-      return;
-    }
-    applyImport(text, file.name);
-  }
-
-  // load imported text: into a blank memo it becomes the body with the file name
-  // as the title heading ("# tmp.txt"); otherwise it's inserted at the cursor
-  function applyImport(text: string, name: string) {
-    const el = editorRef.current;
-    const blank = isBlank(content);
-    let next: string;
-    let caret: number;
-    if (blank) {
-      next = `# ${name}\n\n${text}`;
-      caret = next.length;
-    } else {
-      const start = el ? el.selectionStart : content.length;
-      const end = el ? el.selectionEnd : content.length;
-      next = content.slice(0, start) + text + content.slice(end);
-      caret = start + text.length;
-    }
-    onEdit(next); // same path as typing → autosave + local persistence
-    requestAnimationFrame(() => {
-      const e2 = editorRef.current;
-      if (e2) {
-        e2.focus();
-        e2.setSelectionRange(caret, caret);
-      }
-    });
-    const size = text.length < 1024 ? `${text.length} B` : `${Math.round(text.length / 1024)} KB`;
-    flash(`Imported "${name}" (${size})`);
-  }
-
-  // user accepted the large-import confirmation
-  function confirmImport() {
-    if (!pendingImport) return;
-    const { text, name } = pendingImport;
-    setPendingImport(null);
-    applyImport(text, name);
-  }
-
-  // download the current memo as a .md file (named after its title)
-  function downloadMemo() {
-    if (currentId == null) return;
-    const name = (titleFrom(content) || "memo").replace(/[\/\\:*?"<>|]/g, "_").slice(0, 80);
-    const blob = new Blob([content], { type: "text/markdown;charset=utf-8" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `${name}.md`;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    URL.revokeObjectURL(url);
   }
 
   async function save(id: number, value: string) {
@@ -822,19 +693,8 @@ export default function App() {
     return () => clearInterval(iv);
   }, [offline]);
 
-  // Live preview, debounced so marked+DOMPurify don't run on every keystroke, and
-  // skipped entirely for very large documents (rendering a 600KB+ blob per edit janks
-  // typing). previewSrc lags `content` by PREVIEW_DEBOUNCE ms.
-  const [previewSrc, setPreviewSrc] = useState(content);
-  useEffect(() => {
-    const t = setTimeout(() => setPreviewSrc(content), PREVIEW_DEBOUNCE);
-    return () => clearTimeout(t);
-  }, [content]);
-  const previewTooBig = previewSrc.length > PREVIEW_MAX;
-  const html = useMemo(
-    () => (previewTooBig ? "" : DOMPurify.sanitize(marked.parse(previewSrc) as string)),
-    [previewSrc, previewTooBig]
-  );
+  // debounced, size-capped live markdown preview
+  const { html, tooBig: previewTooBig, size: previewSize } = usePreview(content);
   const visibleMemos = useMemo(() => {
     const q = query.trim().toLowerCase();
     return q ? memos.filter((m) => m.title.toLowerCase().includes(q)) : memos;
@@ -1018,14 +878,7 @@ export default function App() {
               "{pendingImport.name}" ({Math.round(pendingImport.size / 1024)} KB) — 본문에 불러올까요?
             </span>
             <button onClick={confirmImport}>불러오기</button>
-            <button
-              onClick={() => {
-                setPendingImport(null);
-                flash("가져오기 취소됨");
-              }}
-            >
-              취소
-            </button>
+            <button onClick={cancelImport}>취소</button>
           </div>
         )}
 
@@ -1055,7 +908,7 @@ export default function App() {
             />
             {previewTooBig ? (
               <div className="preview markdown preview-skipped">
-                미리보기 생략 — 문서가 너무 커요 ({Math.round(previewSrc.length / 1024)} KB). 편집은 정상 저장됩니다.
+                미리보기 생략 — 문서가 너무 커요 ({Math.round(previewSize / 1024)} KB). 편집은 정상 저장됩니다.
               </div>
             ) : (
               <div className="preview markdown" dangerouslySetInnerHTML={{ __html: html }} />

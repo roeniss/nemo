@@ -113,3 +113,72 @@ describe("memos", () => {
     expect(row).toBeNull();
   });
 });
+
+describe("turnstile enforcement (TURNSTILE_SECRET set)", () => {
+  const loginWith = (body: Record<string, unknown>, e: Record<string, unknown>) =>
+    app.request(
+      "/api/login",
+      { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) },
+      e as never
+    );
+
+  // stub the Cloudflare siteverify call so the test is deterministic + offline
+  function stubSiteverify(success: boolean) {
+    const orig = globalThis.fetch;
+    globalThis.fetch = (async () =>
+      new Response(JSON.stringify({ success }), {
+        headers: { "content-type": "application/json" },
+      })) as typeof fetch;
+    return () => {
+      globalThis.fetch = orig;
+    };
+  }
+
+  it("rejects login with no token when a secret is configured", async () => {
+    const r = await loginWith(
+      { username: "tester", password: "pw" },
+      { ...env, TURNSTILE_SECRET: "sek" }
+    );
+    expect(r.status).toBe(403);
+  });
+
+  it("rejects login when the token fails verification", async () => {
+    const restore = stubSiteverify(false);
+    try {
+      const r = await loginWith(
+        { username: "tester", password: "pw", turnstileToken: "bad" },
+        { ...env, TURNSTILE_SECRET: "sek" }
+      );
+      expect(r.status).toBe(403);
+    } finally {
+      restore();
+    }
+  });
+
+  it("accepts login when the token passes verification", async () => {
+    const restore = stubSiteverify(true);
+    try {
+      const r = await loginWith(
+        { username: "tester", password: "pw", turnstileToken: "good" },
+        { ...env, TURNSTILE_SECRET: "sek" }
+      );
+      expect(r.status).toBe(200);
+      expect(r.headers.get("set-cookie")).toBeTruthy();
+    } finally {
+      restore();
+    }
+  });
+
+  it("still rejects a wrong password even with a valid token", async () => {
+    const restore = stubSiteverify(true);
+    try {
+      const r = await loginWith(
+        { username: "tester", password: "WRONG", turnstileToken: "good" },
+        { ...env, TURNSTILE_SECRET: "sek" }
+      );
+      expect(r.status).toBe(401);
+    } finally {
+      restore();
+    }
+  });
+});

@@ -539,7 +539,7 @@ export default function App() {
       next = content.slice(0, start) + text + content.slice(end);
       caret = start + text.length;
     }
-    onEdit(next); // same path as typing → autosave + localStorage
+    onEdit(next); // same path as typing → autosave + localStorage (sets quotaWarned on overflow)
     requestAnimationFrame(() => {
       const e2 = editorRef.current;
       if (e2) {
@@ -547,8 +547,11 @@ export default function App() {
         e2.setSelectionRange(caret, caret);
       }
     });
-    const size = text.length < 1024 ? `${text.length} B` : `${Math.round(text.length / 1024)} KB`;
-    flash(`Imported "${name}" (${size})`);
+    // keep safeSet's "storage full" warning visible instead of masking it with success
+    if (!quotaWarned.current) {
+      const size = text.length < 1024 ? `${text.length} B` : `${Math.round(text.length / 1024)} KB`;
+      flash(`Imported "${name}" (${size})`);
+    }
   }
 
   // user accepted the large-import confirmation

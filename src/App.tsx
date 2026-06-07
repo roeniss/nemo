@@ -762,7 +762,18 @@ export default function App() {
       setOffline(false); // reached the server — definitely online
       const list = (await r.json()) as MemoMeta[];
       writeList(LIST_CACHE, list);
-      setMemos([...readList(TEMPS_KEY), ...list].sort(byRecent)); // keep local temps visible
+      // Merge rather than blindly replace: the server list governs existence (so
+      // elsewhere-deletions disappear), but for a row present in both keep whichever
+      // updated_at is newer — otherwise a sync whose fetch predates a local save would
+      // briefly revert the just-saved title. Local temps (id < 0) stay visible.
+      setMemos((curMemos) => {
+        const localById = new Map(curMemos.filter((m) => m.id > 0).map((m) => [m.id, m]));
+        const reconciled = list.map((s) => {
+          const l = localById.get(s.id);
+          return l && l.updated_at > s.updated_at ? l : s;
+        });
+        return [...readList(TEMPS_KEY), ...reconciled].sort(byRecent);
+      });
       const id = currentIdRef.current;
       if (id == null || id < 0 || timer.current != null || conflictRef.current || deletedRef.current) return; // skip temp / mid-edit / conflict / deleted
       if (localStorage.getItem(DRAFT + id) != null) return; // unsynced local draft pending

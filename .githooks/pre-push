@@ -1,0 +1,18 @@
+#!/bin/sh
+# Block direct pushes to main — changes should land via a pull request.
+# Activate once per clone:  git config core.hooksPath .githooks
+# Emergency bypass:         git push --no-verify
+remote="$1"
+
+while read -r local_ref local_sha remote_ref remote_sha; do
+  case "$remote_ref" in
+    refs/heads/main)
+      echo "✋ Direct push to 'main' is blocked." >&2
+      echo "   Open a pull request instead (CI runs the e2e suite there)." >&2
+      echo "   Bypass (discouraged): git push --no-verify" >&2
+      exit 1
+      ;;
+  esac
+done
+
+exit 0

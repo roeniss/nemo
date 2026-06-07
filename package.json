@@ -8,6 +8,7 @@
     "preview": "vite preview",
     "deploy": "vite build && wrangler deploy",
     "test": "vitest run",
+    "test:e2e": "playwright test",
     "typecheck": "tsc --noEmit",
     "db:local": "wrangler d1 execute nemo-db --local --file=./schema.sql",
     "db:remote": "wrangler d1 execute nemo-db --remote --file=./schema.sql"
@@ -21,6 +22,7 @@
   "devDependencies": {
     "@cloudflare/vite-plugin": "^1.0.0",
     "@cloudflare/workers-types": "^4.20260606.1",
+    "@playwright/test": "^1.60.0",
     "@preact/preset-vite": "^2.10.5",
     "@vitest/runner": "^4.1.8",
     "@vitest/snapshot": "^4.1.8",

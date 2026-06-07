@@ -20,8 +20,15 @@ declare global {
       reset: (el: HTMLElement) => void;
     };
     __cfTurnstileOnload?: () => void;
+    __NEMO_SYNC_MS__?: number; // e2e seam: override the background-sync cadence
   }
 }
+
+// how often to poll for multi-session changes; e2e can slow this so the timer
+// doesn't re-render mid-assertion (the focus-triggered sync still runs)
+const SYNC_MS = typeof window !== "undefined" && typeof window.__NEMO_SYNC_MS__ === "number"
+  ? window.__NEMO_SYNC_MS__
+  : 10_000;
 
 const TEMPS_KEY = "qm-temps"; // local-only memos not yet pushed to the server
 const LIST_CACHE = "qm-memos"; // cached server list for offline viewing
@@ -165,7 +172,14 @@ export default function App() {
   // reloadable, back/forward-navigable). Covers both openMemo and newMemo since
   // both set currentId; a no-op when the hash already matches (e.g. arriving here
   // via a hashchange) so it never pushes a duplicate history entry.
+  const navStarted = useRef(false);
   useEffect(() => {
+    // skip the initial mount: currentId is null here, but a boot hash (#id) must
+    // survive for the async load effect to deep-link to it — don't strip it.
+    if (!navStarted.current) {
+      navStarted.current = true;
+      return;
+    }
     if (currentId == null) {
       if (location.hash) history.replaceState(null, "", location.pathname + location.search);
     } else if (hashId() !== currentId) {
@@ -770,7 +784,7 @@ export default function App() {
         }
       }
     }
-    const iv = setInterval(sync, 10000);
+    const iv = setInterval(sync, SYNC_MS);
     window.addEventListener("focus", sync);
     return () => {
       clearInterval(iv);
@@ -839,26 +853,31 @@ export default function App() {
     const q = query.trim().toLowerCase();
     return q ? memos.filter((m) => m.title.toLowerCase().includes(q)) : memos;
   }, [memos, query]);
+  const visibleMemosRef = useRef(visibleMemos);
+  visibleMemosRef.current = visibleMemos;
 
   // Alt+K / Alt+J: jump to the previous / next memo in the visible list (vim-style).
   // Uses e.code (physical key) because macOS Option+letter composes a special
   // character into e.key; preventDefault also stops that character being typed.
+  // Reads current id/list from refs (not effect deps) so a keypress right after a
+  // jump never hits a stale handler before the effect re-registers.
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
       if (!e.altKey || e.metaKey || e.ctrlKey) return;
       if (e.code !== "KeyK" && e.code !== "KeyJ") return;
       e.preventDefault();
-      if (!visibleMemos.length) return;
+      const list = visibleMemosRef.current;
+      if (!list.length) return;
       const down = e.code === "KeyJ"; // J = next (down the list), K = previous (up)
-      const idx = visibleMemos.findIndex((m) => m.id === currentId);
-      const next = idx === -1 ? (down ? 0 : visibleMemos.length - 1) : idx + (down ? 1 : -1);
-      if (next < 0 || next >= visibleMemos.length) return; // clamp at the ends
-      const target = visibleMemos[next];
-      if (target && target.id !== currentId) openMemoRef.current(target.id);
+      const idx = list.findIndex((m) => m.id === currentIdRef.current);
+      const next = idx === -1 ? (down ? 0 : list.length - 1) : idx + (down ? 1 : -1);
+      if (next < 0 || next >= list.length) return; // clamp at the ends
+      const target = list[next];
+      if (target && target.id !== currentIdRef.current) openMemoRef.current(target.id);
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [currentId, visibleMemos]);
+  }, []);
 
   if (!authed) return <Login onLogin={login} />;
 

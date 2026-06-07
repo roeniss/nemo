@@ -80,10 +80,11 @@ export default function App() {
   const editorRef = useRef<HTMLTextAreaElement>(null);
   const focusOnOpen = useRef(false); // focus the editor after the next new memo opens
   const fileRef = useRef<HTMLInputElement>(null); // hidden file picker for text import
+  const folderRef = useRef<HTMLInputElement>(null); // hidden folder picker (each file → a memo)
   const { notice, flash } = useToast();
-  // text import (picker + drag-drop, large-file confirm) and .md export
-  const { pendingImport, importFile, confirmImport, cancelImport, downloadMemo, resetImport } =
-    useImport({ content, currentIdRef, editorRef, onEdit, flash });
+  // text import (picker + drag-drop, large-file confirm), folder upload, and .md export
+  const { pendingImport, importFile, importFolder, confirmImport, cancelImport, downloadMemo, resetImport } =
+    useImport({ content, currentIdRef, editorRef, onEdit, flash, setMemos });
   // always-latest openMemo, so the hashchange listener (registered once) never
   // calls a stale closure
   const openMemoRef = useRef<(id: number) => void>(() => {});
@@ -840,12 +841,36 @@ export default function App() {
             >
               ⬆ Import
             </button>
+            <button
+              className="import-folder"
+              onClick={() => folderRef.current?.click()}
+              title="Upload a folder — each file becomes its own memo"
+            >
+              ⬆ Folder
+            </button>
             <button className="new-memo" onClick={newMemo} title="New memo (⌘K)">
               + New
             </button>
           </div>
           <input
+            ref={folderRef}
+            className="folder-input"
+            type="file"
+            multiple
+            // webkitdirectory turns this into a directory picker; it's a non-standard
+            // boolean prop missing from the JSX types, so spread it through. Must be
+            // boolean `true` (not "") — the renderer maps it to the DOM property, and
+            // an empty string would coerce to false.
+            {...({ webkitdirectory: true } as Record<string, boolean>)}
+            style={{ display: "none" }}
+            onChange={(e) => {
+              importFolder(e.currentTarget.files);
+              e.currentTarget.value = ""; // allow re-picking the same folder
+            }}
+          />
+          <input
             ref={fileRef}
+            className="file-input"
             type="file"
             accept=".txt,.md,.markdown,.csv,.json,.log,.yml,.yaml,.xml,text/*,application/json"
             style={{ display: "none" }}

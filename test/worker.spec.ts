@@ -9,7 +9,8 @@ CREATE TABLE memos (
   content TEXT NOT NULL DEFAULT '',
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL,
-  deleted_at INTEGER
+  deleted_at INTEGER,
+  hidden_at INTEGER
 );
 `;
 
@@ -89,6 +90,18 @@ describe("memos", () => {
     expect((await req(`/api/memos/${c.id}`, { headers: h })).status).toBe(404);
     await req(`/api/memos/${c.id}/restore`, { method: "POST", headers: h });
     expect(await (await req("/api/memos", { headers: h })).json()).toHaveLength(1);
+  });
+
+  it("hides a trashed memo from the trash view while keeping the row in the DB", async () => {
+    const h = await authedHeaders();
+    const c = await (await req("/api/memos", { method: "POST", headers: h })).json();
+    await req(`/api/memos/${c.id}`, { method: "DELETE", headers: h });
+    expect(await (await req("/api/trash", { headers: h })).json()).toHaveLength(1);
+    await req(`/api/memos/${c.id}/hide`, { method: "POST", headers: h });
+    expect(await (await req("/api/trash", { headers: h })).json()).toHaveLength(0);
+    // row is still in the DB — not a real delete
+    const row = await env.DB!.prepare("SELECT id FROM memos WHERE id = ?").bind(c.id).first();
+    expect(row).not.toBeNull();
   });
 
   it("hard-purges with ?purge=1 (not recoverable from trash)", async () => {

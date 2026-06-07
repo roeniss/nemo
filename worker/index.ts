@@ -102,15 +102,25 @@ app.post("/api/memos", async (c) => {
 });
 
 app.get("/api/trash", async (c) => {
+  // hidden memos stay in the DB but are excluded from the trash listing
   const { results } = await c.env.DB.prepare(
-    "SELECT id, title, updated_at FROM memos WHERE deleted_at IS NOT NULL ORDER BY deleted_at DESC"
+    "SELECT id, title, updated_at FROM memos WHERE deleted_at IS NOT NULL AND hidden_at IS NULL ORDER BY deleted_at DESC"
   ).all();
   return c.json(results);
 });
 
 app.post("/api/memos/:id/restore", async (c) => {
-  await c.env.DB.prepare("UPDATE memos SET deleted_at = NULL WHERE id = ?")
+  await c.env.DB.prepare("UPDATE memos SET deleted_at = NULL, hidden_at = NULL WHERE id = ?")
     .bind(c.req.param("id"))
+    .run();
+  return c.json({ ok: true });
+});
+
+// hide a trashed memo from the trash view without deleting it — the row stays
+// in the DB, just flagged so it no longer shows up anywhere in the UI
+app.post("/api/memos/:id/hide", async (c) => {
+  await c.env.DB.prepare("UPDATE memos SET hidden_at = ? WHERE id = ?")
+    .bind(Date.now(), c.req.param("id"))
     .run();
   return c.json({ ok: true });
 });

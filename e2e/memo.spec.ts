@@ -1,5 +1,5 @@
-import { test, expect } from "@playwright/test";
-import { sel, uniq } from "./helpers";
+import { test, expect } from "./fixtures";
+import { sel, uniq, blankMemo } from "./helpers";
 
 test.describe("memo editing", () => {
   test('new memo is prefilled with "# ", focused, cursor after it', async ({ page }) => {
@@ -20,8 +20,7 @@ test.describe("memo editing", () => {
 
   test("autosaves typed content and survives a reload", async ({ page }) => {
     const title = uniq("Auto");
-    await page.goto("/");
-    await page.locator(sel.newBtn).click();
+    await blankMemo(page);
     const editor = page.locator(sel.editor);
     await editor.click();
     await page.keyboard.type(`${title}\n\nbody text`);
@@ -38,8 +37,7 @@ test.describe("memo editing", () => {
 
   test("sidebar title follows the first line", async ({ page }) => {
     const title = uniq("Title");
-    await page.goto("/");
-    await page.locator(sel.newBtn).click();
+    await blankMemo(page);
     await page.locator(sel.editor).click();
     await page.keyboard.type(`${title}\n\nx`);
     await expect(page.locator(".status")).toHaveText("Saved");
@@ -48,8 +46,7 @@ test.describe("memo editing", () => {
 
   test("delete shows an Undo toast and restores the memo", async ({ page }) => {
     const title = uniq("Del");
-    await page.goto("/");
-    await page.locator(sel.newBtn).click();
+    await blankMemo(page);
     await page.locator(sel.editor).click();
     await page.keyboard.type(`${title}\n\nbody`);
     await expect(page.locator(".status")).toHaveText("Saved");

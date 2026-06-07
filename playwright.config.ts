@@ -11,8 +11,8 @@ export default defineConfig({
   forbidOnly: !!process.env.CI,
   retries: process.env.CI ? 2 : 0,
   reporter: process.env.CI ? [["list"], ["html", { open: "never" }]] : [["list"]],
-  timeout: 30_000,
-  expect: { timeout: 7_000 },
+  timeout: 45_000,
+  expect: { timeout: 10_000 },
   use: {
     baseURL: BASE,
     trace: "on-first-retry",

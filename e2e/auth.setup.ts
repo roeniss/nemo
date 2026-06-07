@@ -7,3 +7,10 @@ setup("authenticate", async ({ request }) => {
   expect(r.ok()).toBeTruthy();
   await request.storageState({ path: AUTH_STATE });
 });
+
+// warm the dev server once (vite optimizes deps + builds the client bundle on the
+// first page load) so the first real test isn't slow enough to flake on cold start
+setup("warm up", async ({ page }) => {
+  await page.goto("/");
+  await page.locator("form.login, textarea.editor").first().waitFor({ timeout: 60_000 });
+});

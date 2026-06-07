@@ -1,8 +1,8 @@
-import { test, expect } from "@playwright/test";
+import { test, expect } from "./fixtures";
 import { writeFileSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { sel } from "./helpers";
+import { sel, blankMemo } from "./helpers";
 
 let bigPath: string;
 test.beforeAll(() => {
@@ -19,9 +19,7 @@ test.describe("localStorage quota defense", () => {
     const errors: string[] = [];
     page.on("pageerror", (e) => errors.push(e.message));
 
-    await page.goto("/");
-    await page.locator(sel.newBtn).click();
-    await expect(page.locator(sel.editor)).toHaveValue("# ");
+    await blankMemo(page);
 
     // simulate a permanently-full quota for sizable writes
     await page.evaluate(() => {

@@ -28,6 +28,15 @@ export async function purge(request: APIRequestContext, id: number): Promise<voi
   await request.delete(`/api/memos/${id}?purge=1`);
 }
 
+// land on a fresh blank "# " memo (the new-doc default) and wait until it is the
+// stable current memo — avoids racing the async new-memo creation, where the old
+// blank memo still shows "# " before the new one becomes current
+export async function blankMemo(page: Page): Promise<void> {
+  await page.goto("/");
+  await expect(page.locator("textarea.editor")).toHaveValue("# ");
+  await expect(page).toHaveURL(/#\d+$/);
+}
+
 // open a specific memo by navigating to its hash and waiting for it to load
 export async function openMemo(page: Page, id: number, expected?: string): Promise<void> {
   await page.goto(`/#${id}`);

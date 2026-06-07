@@ -1,4 +1,4 @@
-import { test, expect } from "@playwright/test";
+import { test, expect } from "./fixtures";
 import { sel, seedMemo, purge, uniq } from "./helpers";
 
 test.describe("Alt+J / Alt+K memo navigation", () => {
@@ -12,23 +12,29 @@ test.describe("Alt+J / Alt+K memo navigation", () => {
     const idC = await seedMemo(request, `# ${c}\n\nc`);
     const altK = async () => { await page.keyboard.down("Alt"); await page.keyboard.press("KeyK"); await page.keyboard.up("Alt"); };
     const altJ = async () => { await page.keyboard.down("Alt"); await page.keyboard.press("KeyJ"); await page.keyboard.up("Alt"); };
+    // settle on a memo fully (editor content loaded) before the next keypress, so a
+    // press can't race the previous openMemo's async tail
+    const settled = async (title: string, body: string) => {
+      await expect(page.locator(sel.editor)).toHaveValue(`# ${title}\n\n${body}`);
+      await expect(page.locator(sel.activeTitle)).toHaveText(title);
+    };
     try {
       await page.goto(`/#${idC}`); // start at the top of the list (C)
-      await expect(page.locator(sel.activeTitle)).toHaveText(c);
+      await settled(c, "c");
 
       // Alt+K at the very top → clamps (stays on C)
       await altK();
-      await expect(page.locator(sel.activeTitle)).toHaveText(c);
+      await settled(c, "c");
 
       // Alt+J → down to B, then A
       await altJ();
-      await expect(page.locator(sel.activeTitle)).toHaveText(b);
+      await settled(b, "b");
       await altJ();
-      await expect(page.locator(sel.activeTitle)).toHaveText(a);
+      await settled(a, "a");
 
       // Alt+K → back up to B
       await altK();
-      await expect(page.locator(sel.activeTitle)).toHaveText(b);
+      await settled(b, "b");
     } finally {
       await purge(request, idA);
       await purge(request, idB);

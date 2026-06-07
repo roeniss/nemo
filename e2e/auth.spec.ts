@@ -1,4 +1,4 @@
-import { test, expect } from "@playwright/test";
+import { test, expect } from "./fixtures";
 import { USER, PASS, sel } from "./helpers";
 
 // these tests start logged OUT (ignore the shared auth state)
@@ -9,6 +9,16 @@ test.describe("auth", () => {
     await page.goto("/");
     await expect(page.locator("form.login")).toBeVisible();
     await expect(page.locator("form.login h1")).toHaveText("nemo");
+  });
+
+  test("Turnstile widget stays dormant when no sitekey is configured", async ({ page }) => {
+    await page.goto("/");
+    await expect(page.locator("form.login")).toBeVisible();
+    // skip where a sitekey IS configured (e.g. a local .env.local) — there the
+    // widget is expected to render; this asserts the unconfigured CI/prod default
+    const count = await page.locator(".turnstile").count();
+    test.skip(count > 0, "VITE_TURNSTILE_SITEKEY is configured in this environment");
+    expect(count).toBe(0);
   });
 
   test("rejects wrong credentials with a message", async ({ page }) => {

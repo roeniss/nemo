@@ -1,4 +1,4 @@
-import { test, expect } from "@playwright/test";
+import { test, expect } from "./fixtures";
 import { sel, seedMemo, purge, uniq } from "./helpers";
 
 test.describe("search", () => {

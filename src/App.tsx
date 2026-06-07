@@ -33,6 +33,8 @@ const SYNC_MS = typeof window !== "undefined" && typeof window.__NEMO_SYNC_MS__ 
 const TEMPS_KEY = "qm-temps"; // local-only memos not yet pushed to the server
 const LIST_CACHE = "qm-memos"; // cached server list for offline viewing
 const NEW_DOC = "# "; // every new memo opens with the title heading ready to type
+const PREVIEW_DEBOUNCE = 200; // recompute the rendered preview this long after a keystroke
+const PREVIEW_MAX = 200_000; // skip live preview above this size (too heavy to render per edit)
 const SAVE_DEBOUNCE = 300; // save this long after the last keystroke (idle)
 const SAVE_MAX_WAIT = 2000; // ...but at least this often during continuous typing
 
@@ -848,7 +850,19 @@ export default function App() {
     return () => clearInterval(iv);
   }, [offline]);
 
-  const html = useMemo(() => DOMPurify.sanitize(marked.parse(content) as string), [content]);
+  // Live preview, debounced so marked+DOMPurify don't run on every keystroke, and
+  // skipped entirely for very large documents (rendering a 600KB+ blob per edit janks
+  // typing). previewSrc lags `content` by PREVIEW_DEBOUNCE ms.
+  const [previewSrc, setPreviewSrc] = useState(content);
+  useEffect(() => {
+    const t = setTimeout(() => setPreviewSrc(content), PREVIEW_DEBOUNCE);
+    return () => clearTimeout(t);
+  }, [content]);
+  const previewTooBig = previewSrc.length > PREVIEW_MAX;
+  const html = useMemo(
+    () => (previewTooBig ? "" : DOMPurify.sanitize(marked.parse(previewSrc) as string)),
+    [previewSrc, previewTooBig]
+  );
   const visibleMemos = useMemo(() => {
     const q = query.trim().toLowerCase();
     return q ? memos.filter((m) => m.title.toLowerCase().includes(q)) : memos;
@@ -1067,7 +1081,13 @@ export default function App() {
               placeholder="# Title&#10;&#10;Write in markdown…  (or drop/Import a .txt/.md file)"
               spellcheck={false}
             />
-            <div className="preview markdown" dangerouslySetInnerHTML={{ __html: html }} />
+            {previewTooBig ? (
+              <div className="preview markdown preview-skipped">
+                미리보기 생략 — 문서가 너무 커요 ({Math.round(previewSrc.length / 1024)} KB). 편집은 정상 저장됩니다.
+              </div>
+            ) : (
+              <div className="preview markdown" dangerouslySetInnerHTML={{ __html: html }} />
+            )}
           </div>
         )}
       </div>

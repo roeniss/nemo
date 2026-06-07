@@ -229,6 +229,10 @@ input {
   padding: 20px;
   overflow-y: auto;
 }
+.preview-skipped {
+  color: #999;
+  font-size: 13px;
+}
 
 .conflict {
   display: flex;

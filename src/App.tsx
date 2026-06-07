@@ -25,6 +25,7 @@ declare global {
 
 const TEMPS_KEY = "qm-temps"; // local-only memos not yet pushed to the server
 const LIST_CACHE = "qm-memos"; // cached server list for offline viewing
+const NEW_DOC = "# "; // every new memo opens with the title heading ready to type
 const SAVE_DEBOUNCE = 300; // save this long after the last keystroke (idle)
 const SAVE_MAX_WAIT = 2000; // ...but at least this often during continuous typing
 
@@ -39,6 +40,16 @@ async function api(path: string, init?: RequestInit) {
 function titleFrom(content: string): string {
   const line = content.split("\n").find((l) => l.trim()) ?? "";
   return line.replace(/^#+\s*/, "").trim().slice(0, 120) || "Untitled";
+}
+// a memo holding only a heading marker (the "# " we prefill) counts as empty,
+// so an untouched new memo is still auto-purged on leave
+const isBlank = (content: string) => content.replace(/^#+\s*/, "").trim() === "";
+// memo id encoded in the URL hash (#123 / #-123 for temps); null when absent
+function hashId(): number | null {
+  const h = location.hash.replace(/^#/, "");
+  if (!h) return null;
+  const n = Number(h);
+  return Number.isInteger(n) && n !== 0 ? n : null;
 }
 function readList(key: string): MemoMeta[] {
   try {
@@ -85,11 +96,15 @@ export default function App() {
   contentRef.current = content;
   const currentIdRef = useRef(currentId);
   currentIdRef.current = currentId;
+  const editorRef = useRef<HTMLTextAreaElement>(null);
+  const focusOnOpen = useRef(false); // focus the editor after the next new memo opens
+  // always-latest openMemo, so the hashchange listener (registered once) never
+  // calls a stale closure
+  const openMemoRef = useRef<(id: number) => void>(() => {});
 
   // background auth check + list — UI is already on screen; this fills it in
   useEffect(() => {
     const temps = readList(TEMPS_KEY);
-    const want = Number(localStorage.getItem("qm-current")); // restore last-open memo
     api("/memos")
       .then(async (r) => {
         if (r.status === 401) {
@@ -106,8 +121,11 @@ export default function App() {
         setMemos(merged);
         setLoading(false);
         materializeTemps();
-        const target = merged.some((m) => m.id === want) ? want : merged[0]?.id;
-        if (target != null) openMemo(target);
+        // a URL hash points at a memo → open it (bookmark / reload / back-forward);
+        // a fresh visit with no hash defaults to a new document
+        const want = hashId();
+        if (want != null && merged.some((m) => m.id === want)) openMemo(want);
+        else newMemo();
       })
       .catch(() => {
         // offline — render cached list + local temps so the app is usable
@@ -115,22 +133,52 @@ export default function App() {
         setMemos(merged);
         setOffline(true);
         setLoading(false);
-        // restore the last-open memo if we have its content locally
+        // open the hashed memo if we have its content locally, else a new document
+        const want = hashId();
         if (
-          want &&
+          want != null &&
           merged.some((m) => m.id === want) &&
           (want < 0 ||
             localStorage.getItem(DRAFT + want) != null ||
             localStorage.getItem(CONTENT_CACHE + want) != null)
         ) {
           openMemo(want);
+        } else {
+          newMemo(); // creates a local temp while offline
         }
       });
   }, []);
 
-  // remember the open memo so a reload (incl. offline) restores it
+  // reflect the open memo in the URL so each memo is its own page (bookmarkable,
+  // reloadable, back/forward-navigable). Covers both openMemo and newMemo since
+  // both set currentId; a no-op when the hash already matches (e.g. arriving here
+  // via a hashchange) so it never pushes a duplicate history entry.
   useEffect(() => {
-    if (currentId != null) localStorage.setItem("qm-current", String(currentId));
+    if (currentId == null) {
+      if (location.hash) history.replaceState(null, "", location.pathname + location.search);
+    } else if (hashId() !== currentId) {
+      location.hash = String(currentId);
+    }
+  }, [currentId]);
+
+  // back/forward (or an edited URL) → open that memo
+  useEffect(() => {
+    function onHash() {
+      const id = hashId();
+      if (id != null && id !== currentIdRef.current) openMemoRef.current(id);
+    }
+    window.addEventListener("hashchange", onHash);
+    return () => window.removeEventListener("hashchange", onHash);
+  }, []);
+
+  // when a new memo opens, drop the cursor right after the prefilled "# "
+  useEffect(() => {
+    if (focusOnOpen.current && editorRef.current) {
+      focusOnOpen.current = false;
+      const el = editorRef.current;
+      el.focus();
+      el.setSelectionRange(el.value.length, el.value.length);
+    }
   }, [currentId]);
 
   async function login(
@@ -148,7 +196,7 @@ export default function App() {
     const list = (await (await api("/memos")).json()) as MemoMeta[];
     setMemos(list);
     setLoading(false);
-    if (list.length) openMemo(list[0].id);
+    newMemo(); // land in a fresh document, ready to write
     return { ok: true };
   }
 
@@ -156,7 +204,6 @@ export default function App() {
     await leaveCurrent();
     await api("/logout", { method: "POST" });
     localStorage.removeItem("qm-authed");
-    localStorage.removeItem("qm-current");
     setAuthed(false);
     setMemos([]);
     setCurrentId(null);
@@ -176,7 +223,7 @@ export default function App() {
   // otherwise flush any pending save
   async function leaveCurrent() {
     const id = currentIdRef.current;
-    if (id != null && freshIds.current.has(id) && content.trim() === "") {
+    if (id != null && freshIds.current.has(id) && isBlank(content)) {
       if (timer.current) {
         clearTimeout(timer.current);
         timer.current = null;
@@ -238,6 +285,7 @@ export default function App() {
       setOffline(true); // offline — keep the instantly-shown local content
     }
   }
+  openMemoRef.current = openMemo;
 
   async function newMemo() {
     await leaveCurrent();
@@ -248,20 +296,22 @@ export default function App() {
       const memo = (await (await api("/memos", { method: "POST" })).json()) as Memo;
       setMemos((m) => [{ id: memo.id, title: memo.title, updated_at: memo.updated_at }, ...m]);
       setCurrentId(memo.id);
-      setContent("");
+      setContent(NEW_DOC);
       loadedAt.current = memo.updated_at;
       freshIds.current.add(memo.id);
+      focusOnOpen.current = true;
     } catch {
       // offline — create a local temp memo (negative id) that syncs on reconnect
       const id = -Date.now();
       const meta = { id, title: "Untitled", updated_at: Date.now() };
       writeList(TEMPS_KEY, [meta, ...readList(TEMPS_KEY)]);
-      localStorage.setItem(DRAFT + id, "");
+      localStorage.setItem(DRAFT + id, NEW_DOC);
       setMemos((m) => [meta, ...m]);
       setCurrentId(id);
-      setContent("");
+      setContent(NEW_DOC);
       loadedAt.current = meta.updated_at;
       freshIds.current.add(id);
+      focusOnOpen.current = true;
       setOffline(true);
     }
   }
@@ -273,7 +323,7 @@ export default function App() {
     try {
       for (const t of readList(TEMPS_KEY)) {
         const body = localStorage.getItem(DRAFT + t.id) ?? "";
-        if (body.trim() === "") continue; // skip empties (purged or filled later)
+        if (isBlank(body)) continue; // skip empties (purged or filled later)
         try {
           const memo = (await (await api("/memos", { method: "POST" })).json()) as Memo;
           await api(`/memos/${memo.id}`, {
@@ -365,7 +415,7 @@ export default function App() {
   }
 
   async function save(id: number, value: string) {
-    if (value.trim()) freshIds.current.delete(id); // now has content — keep it
+    if (!isBlank(value)) freshIds.current.delete(id); // now has content — keep it
     localStorage.setItem(DRAFT + id, value); // local-first
 
     if (id < 0) {
@@ -533,7 +583,7 @@ export default function App() {
     function onUnload() {
       const id = currentIdRef.current;
       if (id == null || id < 0) return; // temp memos already live in localStorage
-      if (freshIds.current.has(id) && contentRef.current.trim() === "") {
+      if (freshIds.current.has(id) && isBlank(contentRef.current)) {
         fetch(`/api/memos/${id}?purge=1`, { method: "DELETE", keepalive: true });
       } else if (timer.current) {
         fetch(`/api/memos/${id}`, {
@@ -659,6 +709,9 @@ export default function App() {
           <span className={offline ? "status offline" : "status"}>
             {offline ? "Offline — saved locally" : saving ? "Saving…" : "Saved"}
           </span>
+          <button className="new-memo" onClick={newMemo} title="New memo (⌘K)">
+            + New
+          </button>
         </div>
 
         {conflict && (
@@ -676,6 +729,7 @@ export default function App() {
         ) : (
           <div className="pane">
             <textarea
+              ref={editorRef}
               className="editor"
               value={content}
               onChange={(e) => onEdit(e.currentTarget.value)}

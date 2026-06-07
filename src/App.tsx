@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { marked } from "marked";
 import DOMPurify from "dompurify";
+import { kv, hydrate } from "./idb";
 
 marked.setOptions({ gfm: true, breaks: true });
 
@@ -118,7 +119,6 @@ export default function App() {
   const noticeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   // a large file held back for confirmation before loading it into the body
   const [pendingImport, setPendingImport] = useState<{ text: string; name: string; size: number } | null>(null);
-  const quotaWarned = useRef(false); // dedupe the "localStorage full" toast
   // always-latest openMemo, so the hashchange listener (registered once) never
   // calls a stale closure
   const openMemoRef = useRef<(id: number) => void>(() => {});
@@ -126,7 +126,9 @@ export default function App() {
   // background auth check + list — UI is already on screen; this fills it in
   useEffect(() => {
     const temps = readList(TEMPS_KEY);
-    api("/memos")
+    // load the IndexedDB content mirror before anything reads drafts/cache
+    hydrate()
+      .then(() => api("/memos"))
       .then(async (r) => {
         if (r.status === 401) {
           localStorage.removeItem("qm-authed");
@@ -160,8 +162,8 @@ export default function App() {
           want != null &&
           merged.some((m) => m.id === want) &&
           (want < 0 ||
-            localStorage.getItem(DRAFT + want) != null ||
-            localStorage.getItem(CONTENT_CACHE + want) != null)
+            kv.get(DRAFT + want) != null ||
+            kv.get(CONTENT_CACHE + want) != null)
         ) {
           openMemo(want);
         } else {
@@ -260,7 +262,7 @@ export default function App() {
       if (id < 0) {
         // unsynced empty temp — drop it locally
         writeList(TEMPS_KEY, readList(TEMPS_KEY).filter((t) => t.id !== id));
-        localStorage.removeItem(DRAFT + id);
+        kv.remove(DRAFT + id);
       } else {
         try {
           await api(`/memos/${id}?purge=1`, { method: "DELETE" });
@@ -286,8 +288,8 @@ export default function App() {
 
     // stale-while-revalidate: show local content INSTANTLY (no network wait),
     // draft beats cache; then revalidate against the server in the background
-    const draft = localStorage.getItem(DRAFT + id);
-    const local = draft ?? (id < 0 ? "" : localStorage.getItem(CONTENT_CACHE + id) ?? "");
+    const draft = kv.get(DRAFT + id);
+    const local = draft ?? (id < 0 ? "" : kv.get(CONTENT_CACHE + id) ?? "");
     setContent(local);
     loadedAt.current =
       (id < 0 ? readList(TEMPS_KEY) : readList(LIST_CACHE)).find((m) => m.id === id)?.updated_at ??
@@ -299,8 +301,8 @@ export default function App() {
       const r = await api(`/memos/${id}`);
       if (!r.ok || currentIdRef.current !== id) return; // 404 / user moved on
       const memo = (await r.json()) as Memo;
-      safeSet(CONTENT_CACHE + id, memo.content);
-      const d = localStorage.getItem(DRAFT + id);
+      kv.set(CONTENT_CACHE + id, memo.content);
+      const d = kv.get(DRAFT + id);
       if (d != null && d !== memo.content) {
         // unsynced local edit — keep it and push
         loadedAt.current = memo.updated_at;
@@ -339,7 +341,7 @@ export default function App() {
       const id = -Date.now();
       const meta = { id, title: "Untitled", updated_at: Date.now() };
       writeList(TEMPS_KEY, [meta, ...readList(TEMPS_KEY)]);
-      localStorage.setItem(DRAFT + id, NEW_DOC);
+      kv.set(DRAFT + id, NEW_DOC);
       setMemos((m) => [meta, ...m]);
       setCurrentId(id);
       setContent(NEW_DOC);
@@ -356,7 +358,7 @@ export default function App() {
     materializing.current = true;
     try {
       for (const t of readList(TEMPS_KEY)) {
-        const body = localStorage.getItem(DRAFT + t.id) ?? "";
+        const body = kv.get(DRAFT + t.id) ?? "";
         if (isBlank(body)) continue; // skip empties (purged or filled later)
         try {
           const memo = (await (await api("/memos", { method: "POST" })).json()) as Memo;
@@ -365,8 +367,8 @@ export default function App() {
             body: JSON.stringify({ content: body }),
           });
           writeList(TEMPS_KEY, readList(TEMPS_KEY).filter((x) => x.id !== t.id));
-          localStorage.removeItem(DRAFT + t.id);
-          safeSet(CONTENT_CACHE + memo.id, body); // cache for offline read
+          kv.remove(DRAFT + t.id);
+          kv.set(CONTENT_CACHE + memo.id, body); // cache for offline read
           const real = { id: memo.id, title: titleFrom(body), updated_at: Date.now() };
           setMemos((m) =>
             [real, ...m.filter((x) => x.id !== t.id && x.id !== memo.id)].sort(byRecent)
@@ -389,7 +391,7 @@ export default function App() {
     if (id < 0) {
       // unsynced temp — drop locally, nothing to trash/undo
       writeList(TEMPS_KEY, readList(TEMPS_KEY).filter((t) => t.id !== id));
-      localStorage.removeItem(DRAFT + id);
+      kv.remove(DRAFT + id);
       setMemos((ms) => ms.filter((x) => x.id !== id));
       if (currentId === id) {
         setCurrentId(null);
@@ -402,8 +404,8 @@ export default function App() {
     } catch {
       setOffline(true);
     }
-    localStorage.removeItem(CONTENT_CACHE + id);
-    localStorage.removeItem(DRAFT + id);
+    kv.remove(CONTENT_CACHE + id);
+    kv.remove(DRAFT + id);
     setMemos((ms) => ms.filter((x) => x.id !== id));
     if (currentId === id) {
       setCurrentId(null);
@@ -444,7 +446,7 @@ export default function App() {
     setContent(value);
     if (currentId == null) return;
     // local-first: persist to localStorage immediately, before any network call
-    safeSet(DRAFT + currentId, value);
+    kv.set(DRAFT + currentId, value);
     if (conflictRef.current || deletedRef.current) return; // resolve banner first; don't autosave
     if (timer.current) clearTimeout(timer.current);
     setSaving(true);
@@ -463,44 +465,6 @@ export default function App() {
     setNotice(msg);
     if (noticeTimer.current) clearTimeout(noticeTimer.current);
     noticeTimer.current = setTimeout(() => setNotice(null), 3000);
-  }
-
-  // free localStorage space by dropping content caches — these are disposable
-  // (the server holds the original; they only speed up offline reads). Never
-  // touches qm-draft-* (unsynced edits) or the list/temp metadata.
-  function evictCaches(keep?: string): number {
-    const drop: string[] = [];
-    for (let i = 0; i < localStorage.length; i++) {
-      const k = localStorage.key(i);
-      if (k && k.startsWith(CONTENT_CACHE) && k !== keep) drop.push(k);
-    }
-    drop.forEach((k) => localStorage.removeItem(k));
-    return drop.length;
-  }
-
-  // localStorage.setItem that survives QuotaExceededError: evict disposable
-  // caches and retry once; if it still won't fit (the value itself is too big),
-  // give up gracefully — the content stays in memory and still saves to the
-  // server, so nothing is lost while online.
-  function safeSet(key: string, value: string): boolean {
-    try {
-      localStorage.setItem(key, value);
-      quotaWarned.current = false;
-      return true;
-    } catch {
-      evictCaches(CONTENT_CACHE + currentIdRef.current); // keep the open memo's cache
-      try {
-        localStorage.setItem(key, value);
-        quotaWarned.current = false;
-        return true;
-      } catch {
-        if (!quotaWarned.current) {
-          quotaWarned.current = true;
-          flash("로컬 저장 공간이 가득 찼어요 — 서버에는 저장됩니다.");
-        }
-        return false;
-      }
-    }
   }
 
   // known text file extensions — used alongside the MIME type and a NUL-byte
@@ -555,7 +519,7 @@ export default function App() {
       next = content.slice(0, start) + text + content.slice(end);
       caret = start + text.length;
     }
-    onEdit(next); // same path as typing → autosave + localStorage (sets quotaWarned on overflow)
+    onEdit(next); // same path as typing → autosave + local persistence
     requestAnimationFrame(() => {
       const e2 = editorRef.current;
       if (e2) {
@@ -563,11 +527,8 @@ export default function App() {
         e2.setSelectionRange(caret, caret);
       }
     });
-    // keep safeSet's "storage full" warning visible instead of masking it with success
-    if (!quotaWarned.current) {
-      const size = text.length < 1024 ? `${text.length} B` : `${Math.round(text.length / 1024)} KB`;
-      flash(`Imported "${name}" (${size})`);
-    }
+    const size = text.length < 1024 ? `${text.length} B` : `${Math.round(text.length / 1024)} KB`;
+    flash(`Imported "${name}" (${size})`);
   }
 
   // user accepted the large-import confirmation
@@ -595,7 +556,7 @@ export default function App() {
 
   async function save(id: number, value: string) {
     if (!isBlank(value)) freshIds.current.delete(id); // now has content — keep it
-    safeSet(DRAFT + id, value); // local-first
+    kv.set(DRAFT + id, value); // local-first
 
     if (id < 0) {
       // temp memo — local only, never hits the server until materialized
@@ -639,8 +600,8 @@ export default function App() {
         return;
       }
       const { title, updated_at } = (await r.json()) as { title: string; updated_at: number };
-      localStorage.removeItem(DRAFT + id); // synced — drop the local draft
-      safeSet(CONTENT_CACHE + id, value); // cache for offline read
+      kv.remove(DRAFT + id); // synced — drop the local draft
+      kv.set(CONTENT_CACHE + id, value); // cache for offline read
       setOffline(false);
       setMemos((m) => [{ id, title, updated_at }, ...m.filter((x) => x.id !== id)].sort(byRecent));
       if (id === currentIdRef.current) {
@@ -670,7 +631,7 @@ export default function App() {
     await materializeTemps();
     const id = currentIdRef.current;
     if (id != null && id > 0) {
-      const d = localStorage.getItem(DRAFT + id);
+      const d = kv.get(DRAFT + id);
       if (d != null) {
         await save(id, d); // clears `offline` on success
         return;
@@ -718,14 +679,14 @@ export default function App() {
     setDeleted(false);
     // drop the orphaned (trashed) memo locally and create a fresh one
     freshIds.current.delete(id);
-    localStorage.removeItem(DRAFT + id);
-    localStorage.removeItem(CONTENT_CACHE + id);
+    kv.remove(DRAFT + id);
+    kv.remove(CONTENT_CACHE + id);
     setMemos((ms) => ms.filter((x) => x.id !== id));
     try {
       const memo = (await (await api("/memos", { method: "POST" })).json()) as Memo;
       const r = await api(`/memos/${memo.id}`, { method: "PUT", body: JSON.stringify({ content: body }) });
       const { title, updated_at } = (await r.json()) as { title: string; updated_at: number };
-      safeSet(CONTENT_CACHE + memo.id, body);
+      kv.set(CONTENT_CACHE + memo.id, body);
       setMemos((m) => [{ id: memo.id, title, updated_at }, ...m.filter((x) => x.id !== memo.id)].sort(byRecent));
       setCurrentId(memo.id); // currentId → hash effect points the URL at the new memo
       setContent(body);
@@ -742,8 +703,8 @@ export default function App() {
     setDeleted(false);
     if (id != null) {
       freshIds.current.delete(id);
-      localStorage.removeItem(DRAFT + id);
-      localStorage.removeItem(CONTENT_CACHE + id);
+      kv.remove(DRAFT + id);
+      kv.remove(CONTENT_CACHE + id);
       setMemos((ms) => ms.filter((x) => x.id !== id));
     }
     setCurrentId(null); // currentId → hash effect clears the URL
@@ -776,11 +737,11 @@ export default function App() {
       });
       const id = currentIdRef.current;
       if (id == null || id < 0 || timer.current != null || conflictRef.current || deletedRef.current) return; // skip temp / mid-edit / conflict / deleted
-      if (localStorage.getItem(DRAFT + id) != null) return; // unsynced local draft pending
+      if (kv.get(DRAFT + id) != null) return; // unsynced local draft pending
       const cur = list.find((x) => x.id === id);
       if (cur && cur.updated_at > loadedAt.current) {
         const memo = (await (await api(`/memos/${id}`)).json()) as Memo;
-        safeSet(CONTENT_CACHE + id, memo.content);
+        kv.set(CONTENT_CACHE + id, memo.content);
         if (timer.current == null && currentIdRef.current === id) {
           setContent(memo.content);
           loadedAt.current = memo.updated_at;

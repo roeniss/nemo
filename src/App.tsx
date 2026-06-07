@@ -103,6 +103,8 @@ export default function App() {
   const fileRef = useRef<HTMLInputElement>(null); // hidden file picker for text import
   const [notice, setNotice] = useState<string | null>(null); // transient toast (import status)
   const noticeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // a large file held back for confirmation before loading it into the body
+  const [pendingImport, setPendingImport] = useState<{ text: string; name: string; size: number } | null>(null);
   // always-latest openMemo, so the hashchange listener (registered once) never
   // calls a stale closure
   const openMemoRef = useRef<(id: number) => void>(() => {});
@@ -257,6 +259,7 @@ export default function App() {
     setConflict(false);
     deletedRef.current = false;
     setDeleted(false);
+    setPendingImport(null);
     lastSaveAt.current = Date.now();
     setCurrentId(id);
 
@@ -300,6 +303,7 @@ export default function App() {
     setConflict(false);
     deletedRef.current = false;
     setDeleted(false);
+    setPendingImport(null);
     lastSaveAt.current = Date.now();
     try {
       const memo = (await (await api("/memos", { method: "POST" })).json()) as Memo;
@@ -445,8 +449,10 @@ export default function App() {
   const TEXT_EXT =
     /\.(txt|text|md|markdown|mdown|csv|tsv|json|jsonc|log|ya?ml|toml|ini|conf|env|xml|html?|css|scss|js|mjs|cjs|jsx|ts|tsx|py|rb|go|rs|c|h|cc|cpp|hpp|java|kt|swift|php|sh|bash|zsh|sql|svg|diff|patch|gitignore)$/i;
 
-  // import a text file's contents into the current memo: replace the body when
-  // it's still blank (just the "# " prefill), otherwise insert at the cursor
+  const IMPORT_CONFIRM_BYTES = 100 * 1024; // ask before loading a file this big into the body
+
+  // import a text file into the current memo. Files over IMPORT_CONFIRM_BYTES are
+  // held back behind a confirmation banner first (pendingImport → confirmImport).
   async function importFile(file: File | null | undefined) {
     if (!file) return;
     const looksText =
@@ -467,13 +473,30 @@ export default function App() {
       return;
     }
     if (currentIdRef.current == null) return; // a memo is always open (new-doc default)
+    if (file.size > IMPORT_CONFIRM_BYTES) {
+      setPendingImport({ text, name: file.name, size: file.size }); // confirm before loading
+      return;
+    }
+    applyImport(text, file.name);
+  }
+
+  // load imported text: into a blank memo it becomes the body with the file name
+  // as the title heading ("# tmp.txt"); otherwise it's inserted at the cursor
+  function applyImport(text: string, name: string) {
     const el = editorRef.current;
     const blank = isBlank(content);
-    const start = !blank && el ? el.selectionStart : content.length;
-    const end = !blank && el ? el.selectionEnd : content.length;
-    const next = blank ? text : content.slice(0, start) + text + content.slice(end);
+    let next: string;
+    let caret: number;
+    if (blank) {
+      next = `# ${name}\n\n${text}`;
+      caret = next.length;
+    } else {
+      const start = el ? el.selectionStart : content.length;
+      const end = el ? el.selectionEnd : content.length;
+      next = content.slice(0, start) + text + content.slice(end);
+      caret = start + text.length;
+    }
     onEdit(next); // same path as typing → autosave + localStorage
-    const caret = blank ? next.length : start + text.length;
     requestAnimationFrame(() => {
       const e2 = editorRef.current;
       if (e2) {
@@ -482,7 +505,30 @@ export default function App() {
       }
     });
     const size = text.length < 1024 ? `${text.length} B` : `${Math.round(text.length / 1024)} KB`;
-    flash(`Imported "${file.name}" (${size})`);
+    flash(`Imported "${name}" (${size})`);
+  }
+
+  // user accepted the large-import confirmation
+  function confirmImport() {
+    if (!pendingImport) return;
+    const { text, name } = pendingImport;
+    setPendingImport(null);
+    applyImport(text, name);
+  }
+
+  // download the current memo as a .md file (named after its title)
+  function downloadMemo() {
+    if (currentId == null) return;
+    const name = (titleFrom(content) || "memo").replace(/[\/\\:*?"<>|]/g, "_").slice(0, 80);
+    const blob = new Blob([content], { type: "text/markdown;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `${name}.md`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
   }
 
   async function save(id: number, value: string) {
@@ -867,16 +913,26 @@ export default function App() {
           <span className={offline ? "status offline" : "status"}>
             {offline ? "Offline — saved locally" : saving ? "Saving…" : "Saved"}
           </span>
-          <button
-            className="import"
-            onClick={() => fileRef.current?.click()}
-            title="Import a text file into this memo"
-          >
-            ⬆ Import
-          </button>
-          <button className="new-memo" onClick={newMemo} title="New memo (⌘K)">
-            + New
-          </button>
+          <div className="topbar-actions">
+            <button
+              className="download"
+              onClick={downloadMemo}
+              disabled={currentId == null}
+              title="Download this memo as .md"
+            >
+              ⬇ .md
+            </button>
+            <button
+              className="import"
+              onClick={() => fileRef.current?.click()}
+              title="Import a text file into this memo"
+            >
+              ⬆ Import
+            </button>
+            <button className="new-memo" onClick={newMemo} title="New memo (⌘K)">
+              + New
+            </button>
+          </div>
           <input
             ref={fileRef}
             type="file"
@@ -902,6 +958,23 @@ export default function App() {
             <span>이 메모는 다른 곳에서 삭제되었습니다.</span>
             <button onClick={recoverAsNew}>새 메모로 복구</button>
             <button onClick={discardDeleted}>버리기</button>
+          </div>
+        )}
+
+        {pendingImport && (
+          <div className="conflict">
+            <span>
+              "{pendingImport.name}" ({Math.round(pendingImport.size / 1024)} KB) — 본문에 불러올까요?
+            </span>
+            <button onClick={confirmImport}>불러오기</button>
+            <button
+              onClick={() => {
+                setPendingImport(null);
+                flash("가져오기 취소됨");
+              }}
+            >
+              취소
+            </button>
           </div>
         )}
 

@@ -188,11 +188,17 @@ input {
   padding: 6px 10px;
   border-bottom: 1px solid #e5e5e5;
 }
-.topbar .import {
-  margin-left: auto; /* push the right-hand button group to the top-right */
+.topbar-actions {
+  margin-left: auto; /* push the button group to the top-right */
+  display: flex;
+  gap: 6px;
 }
 .topbar .new-memo {
   font-weight: 600;
+}
+.topbar .download:disabled {
+  opacity: 0.4;
+  cursor: default;
 }
 .status {
   font-size: 12px;

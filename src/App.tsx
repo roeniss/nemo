@@ -686,6 +686,26 @@ export default function App() {
     return q ? memos.filter((m) => m.title.toLowerCase().includes(q)) : memos;
   }, [memos, query]);
 
+  // Alt+K / Alt+J: jump to the previous / next memo in the visible list (vim-style).
+  // Uses e.code (physical key) because macOS Option+letter composes a special
+  // character into e.key; preventDefault also stops that character being typed.
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if (!e.altKey || e.metaKey || e.ctrlKey) return;
+      if (e.code !== "KeyK" && e.code !== "KeyJ") return;
+      e.preventDefault();
+      if (!visibleMemos.length) return;
+      const down = e.code === "KeyJ"; // J = next (down the list), K = previous (up)
+      const idx = visibleMemos.findIndex((m) => m.id === currentId);
+      const next = idx === -1 ? (down ? 0 : visibleMemos.length - 1) : idx + (down ? 1 : -1);
+      if (next < 0 || next >= visibleMemos.length) return; // clamp at the ends
+      const target = visibleMemos[next];
+      if (target && target.id !== currentId) openMemoRef.current(target.id);
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [currentId, visibleMemos]);
+
   if (!authed) return <Login onLogin={login} />;
 
   return (

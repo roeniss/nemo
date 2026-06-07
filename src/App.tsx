@@ -20,8 +20,15 @@ declare global {
       reset: (el: HTMLElement) => void;
     };
     __cfTurnstileOnload?: () => void;
+    __NEMO_SYNC_MS__?: number; // e2e seam: override the background-sync cadence
   }
 }
+
+// how often to poll for multi-session changes; e2e can slow this so the timer
+// doesn't re-render mid-assertion (the focus-triggered sync still runs)
+const SYNC_MS = typeof window !== "undefined" && typeof window.__NEMO_SYNC_MS__ === "number"
+  ? window.__NEMO_SYNC_MS__
+  : 10_000;
 
 const TEMPS_KEY = "qm-temps"; // local-only memos not yet pushed to the server
 const LIST_CACHE = "qm-memos"; // cached server list for offline viewing
@@ -777,7 +784,7 @@ export default function App() {
         }
       }
     }
-    const iv = setInterval(sync, 10000);
+    const iv = setInterval(sync, SYNC_MS);
     window.addEventListener("focus", sync);
     return () => {
       clearInterval(iv);

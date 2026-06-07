@@ -188,8 +188,10 @@ input {
   padding: 6px 10px;
   border-bottom: 1px solid #e5e5e5;
 }
+.topbar .import {
+  margin-left: auto; /* push the right-hand button group to the top-right */
+}
 .topbar .new-memo {
-  margin-left: auto; /* pin to the top-right */
   font-weight: 600;
 }
 .status {

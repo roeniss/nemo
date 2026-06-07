@@ -100,6 +100,9 @@ export default function App() {
   currentIdRef.current = currentId;
   const editorRef = useRef<HTMLTextAreaElement>(null);
   const focusOnOpen = useRef(false); // focus the editor after the next new memo opens
+  const fileRef = useRef<HTMLInputElement>(null); // hidden file picker for text import
+  const [notice, setNotice] = useState<string | null>(null); // transient toast (import status)
+  const noticeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   // always-latest openMemo, so the hashchange listener (registered once) never
   // calls a stale closure
   const openMemoRef = useRef<(id: number) => void>(() => {});
@@ -405,6 +408,13 @@ export default function App() {
     setMemos((await (await api("/memos")).json()) as MemoMeta[]);
   }
 
+  // permanently hide a trashed memo from view — the row stays in the DB,
+  // it's just excluded from the trash listing server-side
+  async function hideTrash(id: number) {
+    await api(`/memos/${id}/hide`, { method: "POST" });
+    setTrash((t) => t.filter((x) => x.id !== id));
+  }
+
   function onEdit(value: string) {
     setContent(value);
     if (currentId == null) return;
@@ -421,6 +431,58 @@ export default function App() {
       timer.current = null; // debounce fired — no edit pending (keeps the guard honest)
       save(currentId, value);
     }, delay);
+  }
+
+  // brief bottom toast, auto-dismissed
+  function flash(msg: string) {
+    setNotice(msg);
+    if (noticeTimer.current) clearTimeout(noticeTimer.current);
+    noticeTimer.current = setTimeout(() => setNotice(null), 3000);
+  }
+
+  // known text file extensions — used alongside the MIME type and a NUL-byte
+  // sniff to keep binaries out
+  const TEXT_EXT =
+    /\.(txt|text|md|markdown|mdown|csv|tsv|json|jsonc|log|ya?ml|toml|ini|conf|env|xml|html?|css|scss|js|mjs|cjs|jsx|ts|tsx|py|rb|go|rs|c|h|cc|cpp|hpp|java|kt|swift|php|sh|bash|zsh|sql|svg|diff|patch|gitignore)$/i;
+
+  // import a text file's contents into the current memo: replace the body when
+  // it's still blank (just the "# " prefill), otherwise insert at the cursor
+  async function importFile(file: File | null | undefined) {
+    if (!file) return;
+    const looksText =
+      file.type.startsWith("text/") ||
+      file.type === "application/json" ||
+      file.type === "image/svg+xml" ||
+      file.type === "" || // many text files report no MIME
+      TEXT_EXT.test(file.name);
+    let text: string;
+    try {
+      text = await file.text();
+    } catch {
+      flash("파일을 읽지 못했어요.");
+      return;
+    }
+    if (!looksText || text.includes("\u0000")) {
+      flash("텍스트 파일만 업로드할 수 있어요.");
+      return;
+    }
+    if (currentIdRef.current == null) return; // a memo is always open (new-doc default)
+    const el = editorRef.current;
+    const blank = isBlank(content);
+    const start = !blank && el ? el.selectionStart : content.length;
+    const end = !blank && el ? el.selectionEnd : content.length;
+    const next = blank ? text : content.slice(0, start) + text + content.slice(end);
+    onEdit(next); // same path as typing → autosave + localStorage
+    const caret = blank ? next.length : start + text.length;
+    requestAnimationFrame(() => {
+      const e2 = editorRef.current;
+      if (e2) {
+        e2.focus();
+        e2.setSelectionRange(caret, caret);
+      }
+    });
+    const size = text.length < 1024 ? `${text.length} B` : `${Math.round(text.length / 1024)} KB`;
+    flash(`Imported "${file.name}" (${size})`);
   }
 
   async function save(id: number, value: string) {
@@ -782,6 +844,13 @@ export default function App() {
                   >
                     ↩
                   </button>
+                  <button
+                    className="del"
+                    title="Hide"
+                    onClick={() => hideTrash(m.id)}
+                  >
+                    ×
+                  </button>
                 </li>
               ))}
               {trash.length === 0 && <li className="empty">Trash is empty</li>}
@@ -798,9 +867,26 @@ export default function App() {
           <span className={offline ? "status offline" : "status"}>
             {offline ? "Offline — saved locally" : saving ? "Saving…" : "Saved"}
           </span>
+          <button
+            className="import"
+            onClick={() => fileRef.current?.click()}
+            title="Import a text file into this memo"
+          >
+            ⬆ Import
+          </button>
           <button className="new-memo" onClick={newMemo} title="New memo (⌘K)">
             + New
           </button>
+          <input
+            ref={fileRef}
+            type="file"
+            accept=".txt,.md,.markdown,.csv,.json,.log,.yml,.yaml,.xml,text/*,application/json"
+            style={{ display: "none" }}
+            onChange={(e) => {
+              importFile(e.currentTarget.files?.[0]);
+              e.currentTarget.value = ""; // allow re-picking the same file
+            }}
+          />
         </div>
 
         {conflict && (
@@ -830,7 +916,17 @@ export default function App() {
               className="editor"
               value={content}
               onChange={(e) => onEdit(e.currentTarget.value)}
-              placeholder="# Title&#10;&#10;Write in markdown…"
+              onDragOver={(e) => {
+                if (e.dataTransfer?.types?.includes("Files")) e.preventDefault(); // allow drop
+              }}
+              onDrop={(e) => {
+                const f = e.dataTransfer?.files?.[0];
+                if (f) {
+                  e.preventDefault(); // don't let the browser navigate to the file
+                  importFile(f);
+                }
+              }}
+              placeholder="# Title&#10;&#10;Write in markdown…  (or drop/Import a .txt/.md file)"
               spellcheck={false}
             />
             <div className="preview markdown" dangerouslySetInnerHTML={{ __html: html }} />
@@ -842,6 +938,12 @@ export default function App() {
         <div className="toast">
           <span>Deleted "{undo.title}"</span>
           <button onClick={undoDelete}>Undo</button>
+        </div>
+      )}
+
+      {notice && !undo && (
+        <div className="toast">
+          <span>{notice}</span>
         </div>
       )}
     </div>

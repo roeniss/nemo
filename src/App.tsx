@@ -52,6 +52,7 @@ export default function App() {
   const [memos, setMemos] = useState<MemoMeta[]>([]);
   const [trash, setTrash] = useState<MemoMeta[]>([]);
   const [view, setView] = useState<"memos" | "trash">("memos");
+  const [viewing, setViewing] = useState<Memo | null>(null); // trashed memo open in read-only view
   const [query, setQuery] = useState("");
   const [undo, setUndo] = useState<{ id: number; title: string } | null>(null);
   const undoTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -85,6 +86,11 @@ export default function App() {
   const lastSaveAt = useRef(0); // for the max-wait save guarantee
   const inFlight = useRef(false); // one server save at a time (avoids self-conflict)
   const pendingSave = useRef<{ id: number; value: string } | null>(null);
+  // a write the server may have committed but whose ack we never saw (keepalive
+  // ⌘W flush, or a save whose response was lost on a flaky connection). It leaves
+  // loadedAt stale, so the next save 409s against our OWN edit — this lets us tell
+  // that apart from a real other-session change.
+  const unacked = useRef<{ id: number; value: string } | null>(null);
   const materializing = useRef(false); // guard against double-pushing temp memos
   // latest values for the beforeunload handler (avoids stale closure)
   const contentRef = useRef(content);
@@ -257,7 +263,9 @@ export default function App() {
   }
 
   async function openMemo(id: number) {
+    if (id === currentIdRef.current) return; // already open — re-clicking it is a no-op (and would purge a fresh-blank current memo via leaveCurrent)
     await leaveCurrent();
+    setViewing(null); // leaving any read-only trash view
     conflictRef.current = false;
     setConflict(false);
     deletedRef.current = false;
@@ -301,6 +309,7 @@ export default function App() {
 
   async function newMemo() {
     await leaveCurrent();
+    setViewing(null); // leaving any read-only trash view
     conflictRef.current = false;
     setConflict(false);
     deletedRef.current = false;
@@ -377,6 +386,28 @@ export default function App() {
       }
       return;
     }
+    // a never-used empty memo (created this session, never given content) — purge
+    // it outright instead of sending an "Untitled" placeholder to the trash
+    if (freshIds.current.has(id)) {
+      freshIds.current.delete(id);
+      if (currentId === id && timer.current) {
+        clearTimeout(timer.current); // cancel any pending save that would resurrect it
+        timer.current = null;
+      }
+      try {
+        await api(`/memos/${id}?purge=1`, { method: "DELETE" });
+      } catch {
+        setOffline(true);
+      }
+      kv.remove(CONTENT_CACHE + id);
+      kv.remove(DRAFT + id);
+      setMemos((ms) => ms.filter((x) => x.id !== id));
+      if (currentId === id) {
+        setCurrentId(null);
+        setContent("");
+      }
+      return;
+    }
     try {
       await api(`/memos/${id}`, { method: "DELETE" });
     } catch {
@@ -407,8 +438,22 @@ export default function App() {
     setTrash((await (await api("/trash")).json()) as MemoMeta[]);
   }
 
+  // open a trashed memo read-only so its content can be inspected before
+  // deciding to restore or hide it
+  async function viewTrash(id: number) {
+    const r = await api(`/trash/${id}`);
+    if (!r.ok) {
+      // already restored/hidden in another session — refresh the list
+      setViewing((v) => (v?.id === id ? null : v));
+      loadTrash();
+      return;
+    }
+    setViewing((await r.json()) as Memo);
+  }
+
   async function restoreMemo(id: number) {
     await api(`/memos/${id}/restore`, { method: "POST" });
+    setViewing((v) => (v?.id === id ? null : v));
     setTrash((t) => t.filter((x) => x.id !== id));
     setMemos((await (await api("/memos")).json()) as MemoMeta[]);
   }
@@ -417,6 +462,7 @@ export default function App() {
   // it's just excluded from the trash listing server-side
   async function hideTrash(id: number) {
     await api(`/memos/${id}/hide`, { method: "POST" });
+    setViewing((v) => (v?.id === id ? null : v));
     setTrash((t) => t.filter((x) => x.id !== id));
   }
 
@@ -464,10 +510,31 @@ export default function App() {
     }
     inFlight.current = true;
     try {
-      const r = await api(`/memos/${id}`, {
+      let r = await api(`/memos/${id}`, {
         method: "PUT",
         body: JSON.stringify({ content: value, base: loadedAt.current }),
       });
+      if (r.status === 409) {
+        // not necessarily another session: our own last write may have reached
+        // the server while we never saw the ack (a keepalive ⌘W flush, or a save
+        // whose response was lost on a flaky connection), leaving loadedAt stale.
+        // If the server's current content is exactly that un-acked write, re-base
+        // to its updated_at and retry — don't accuse the user of a phantom conflict.
+        const pending = unacked.current;
+        if (pending && pending.id === id) {
+          const srv = await api(`/memos/${id}`)
+            .then((x) => (x.ok ? (x.json() as Promise<Memo>) : null))
+            .catch(() => null);
+          if (srv && srv.content === pending.value) {
+            loadedAt.current = srv.updated_at;
+            unacked.current = null;
+            r = await api(`/memos/${id}`, {
+              method: "PUT",
+              body: JSON.stringify({ content: value, base: loadedAt.current }),
+            });
+          }
+        }
+      }
       if (r.status === 409) {
         // genuinely changed in another session — let the user choose
         conflictRef.current = true;
@@ -484,6 +551,7 @@ export default function App() {
         return;
       }
       const { title, updated_at } = (await r.json()) as { title: string; updated_at: number };
+      unacked.current = null; // confirmed landed — no longer un-acked
       kv.remove(DRAFT + id); // synced — drop the local draft
       kv.set(CONTENT_CACHE + id, value); // cache for offline read
       setOffline(false);
@@ -494,7 +562,11 @@ export default function App() {
       }
       setSaving(false);
     } catch {
-      // network failure — the draft in localStorage is the safety net; retry later
+      // network failure — the server MAY have committed this write before the
+      // response was lost, so remember it: a later 409 against this content is
+      // our own edit, not a foreign conflict. The localStorage draft is the
+      // safety net for retry.
+      unacked.current = { id, value };
       setOffline(true);
       setSaving(false);
     } finally {
@@ -536,6 +608,7 @@ export default function App() {
     const memo = (await (await api(`/memos/${id}`)).json()) as Memo;
     setContent(memo.content);
     loadedAt.current = memo.updated_at;
+    unacked.current = null;
     conflictRef.current = false;
     setConflict(false);
   }
@@ -552,6 +625,7 @@ export default function App() {
     });
     const { updated_at } = (await r.json()) as { updated_at: number };
     loadedAt.current = updated_at;
+    unacked.current = null;
   }
 
   // memo was trashed elsewhere — save the on-screen content as a brand-new memo
@@ -693,6 +767,10 @@ export default function App() {
           body: JSON.stringify({ content: contentRef.current }),
           keepalive: true,
         });
+        // this keepalive write has no base (force-overwrite) and we'll never see
+        // its ack — record it so that if the user chooses to STAY, the next save
+        // recognises the bumped server version as our own, not a phantom conflict.
+        unacked.current = { id, value: contentRef.current };
         e.preventDefault();
         e.returnValue = ""; // triggers the browser's native "Leave site?" confirm
       }
@@ -735,8 +813,9 @@ export default function App() {
     return () => clearInterval(iv);
   }, [offline]);
 
-  // debounced, size-capped live markdown preview
-  const { html, tooBig: previewTooBig, size: previewSize } = usePreview(content);
+  // debounced live markdown preview — renders the editor content, or the read-only
+  // trash memo when one is open (the editor is hidden in that case)
+  const { html } = usePreview(viewing ? viewing.content : content);
   const visibleMemos = useMemo(() => {
     const q = query.trim().toLowerCase();
     return q ? memos.filter((m) => m.title.toLowerCase().includes(q)) : memos;
@@ -782,7 +861,10 @@ export default function App() {
           <div className="side-tabs">
             <button
               className={view === "memos" ? "tab active" : "tab"}
-              onClick={() => setView("memos")}
+              onClick={() => {
+                setView("memos");
+                setViewing(null);
+              }}
             >
               Memos
             </button>
@@ -834,19 +916,29 @@ export default function App() {
           ) : (
             <ul className="memo-list">
               {trash.map((m) => (
-                <li key={m.id}>
+                <li
+                  key={m.id}
+                  className={m.id === viewing?.id ? "active" : ""}
+                  onClick={() => viewTrash(m.id)}
+                >
                   <span className="memo-title">{m.title || "Untitled"}</span>
                   <button
                     className="restore"
                     title="Restore"
-                    onClick={() => restoreMemo(m.id)}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      restoreMemo(m.id);
+                    }}
                   >
                     ↩
                   </button>
                   <button
                     className="del"
                     title="Hide"
-                    onClick={() => hideTrash(m.id)}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      hideTrash(m.id);
+                    }}
                   >
                     ×
                   </button>
@@ -956,7 +1048,25 @@ export default function App() {
           </div>
         )}
 
-        {currentId == null ? (
+        {viewing && (
+          <div className="conflict">
+            <span>휴지통의 메모입니다 (읽기 전용).</span>
+            <button onClick={() => restoreMemo(viewing.id)}>복구</button>
+            <button onClick={() => hideTrash(viewing.id)}>숨기기</button>
+          </div>
+        )}
+
+        {viewing ? (
+          <div className="pane">
+            <textarea
+              className="editor"
+              value={viewing.content}
+              readOnly
+              spellcheck={false}
+            />
+            <div className="preview markdown" dangerouslySetInnerHTML={{ __html: html }} />
+          </div>
+        ) : currentId == null ? (
           <div className="center">
             {loading ? "Loading…" : "Select a memo on the left, or create a new one."}
           </div>
@@ -985,13 +1095,7 @@ export default function App() {
               placeholder="# Title&#10;&#10;Write in markdown…  (drop a file for a new memo · paste an image to embed)"
               spellcheck={false}
             />
-            {previewTooBig ? (
-              <div className="preview markdown preview-skipped">
-                미리보기 생략 — 문서가 너무 커요 ({Math.round(previewSize / 1024)} KB). 편집은 정상 저장됩니다.
-              </div>
-            ) : (
-              <div className="preview markdown" dangerouslySetInnerHTML={{ __html: html }} />
-            )}
+            <div className="preview markdown" dangerouslySetInnerHTML={{ __html: html }} />
           </div>
         )}
       </div>

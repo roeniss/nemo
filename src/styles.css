@@ -266,14 +266,15 @@ input {
   line-height: 1.6;
   border-right: 1px solid var(--border);
 }
+.editor[readonly] {
+  color: var(--fg-muted);
+  background: var(--surface-2);
+  cursor: default;
+}
 .preview {
   width: 50%;
   padding: 20px;
   overflow-y: auto;
-}
-.preview-skipped {
-  color: var(--fg-muted);
-  font-size: 13px;
 }
 
 .conflict {

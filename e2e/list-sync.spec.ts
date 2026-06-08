@@ -1,5 +1,5 @@
 import { test, expect } from "./fixtures";
-import { sel, seedMemo, purge } from "./helpers";
+import { sel, seedMemo, purge, uniq } from "./helpers";
 
 test.describe("list sync", () => {
   test("a stale background sync does not revert a just-saved title", async ({ page, request }) => {
@@ -28,6 +28,31 @@ test.describe("list sync", () => {
       await expect(page.locator(sel.activeTitle)).toHaveText("Edited");
     } finally {
       await page.unroute("**/api/memos").catch(() => {});
+      await purge(request, id);
+    }
+  });
+
+  test("a background sync pulls in content changed elsewhere when there are no local edits", async ({
+    page,
+    request,
+  }) => {
+    const title = uniq("SyncPull");
+    const id = await seedMemo(request, `# ${title}\n\nv1`);
+    try {
+      await page.goto(`/#${id}`);
+      // open + revalidate settles loadedAt to the seeded updated_at
+      await expect(page.locator(sel.editor)).toHaveValue(`# ${title}\n\nv1`);
+
+      // another session edits the body — server updated_at advances past our base.
+      // We have NO local draft (we never typed), so the sync is free to adopt it.
+      await request.put(`/api/memos/${id}`, { data: { content: `# ${title}\n\nEXTERNAL v2` } });
+
+      // background sync (fired on focus) notices the newer updated_at and reloads
+      // the open memo's content into the editor — no banner, no conflict
+      await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+      await expect(page.locator(sel.editor)).toHaveValue(`# ${title}\n\nEXTERNAL v2`);
+      await expect(page.locator(".conflict")).toHaveCount(0);
+    } finally {
       await purge(request, id);
     }
   });

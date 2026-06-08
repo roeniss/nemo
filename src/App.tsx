@@ -86,6 +86,11 @@ export default function App() {
   const lastSaveAt = useRef(0); // for the max-wait save guarantee
   const inFlight = useRef(false); // one server save at a time (avoids self-conflict)
   const pendingSave = useRef<{ id: number; value: string } | null>(null);
+  // a write the server may have committed but whose ack we never saw (keepalive
+  // ⌘W flush, or a save whose response was lost on a flaky connection). It leaves
+  // loadedAt stale, so the next save 409s against our OWN edit — this lets us tell
+  // that apart from a real other-session change.
+  const unacked = useRef<{ id: number; value: string } | null>(null);
   const materializing = useRef(false); // guard against double-pushing temp memos
   // latest values for the beforeunload handler (avoids stale closure)
   const contentRef = useRef(content);
@@ -482,10 +487,31 @@ export default function App() {
     }
     inFlight.current = true;
     try {
-      const r = await api(`/memos/${id}`, {
+      let r = await api(`/memos/${id}`, {
         method: "PUT",
         body: JSON.stringify({ content: value, base: loadedAt.current }),
       });
+      if (r.status === 409) {
+        // not necessarily another session: our own last write may have reached
+        // the server while we never saw the ack (a keepalive ⌘W flush, or a save
+        // whose response was lost on a flaky connection), leaving loadedAt stale.
+        // If the server's current content is exactly that un-acked write, re-base
+        // to its updated_at and retry — don't accuse the user of a phantom conflict.
+        const pending = unacked.current;
+        if (pending && pending.id === id) {
+          const srv = await api(`/memos/${id}`)
+            .then((x) => (x.ok ? (x.json() as Promise<Memo>) : null))
+            .catch(() => null);
+          if (srv && srv.content === pending.value) {
+            loadedAt.current = srv.updated_at;
+            unacked.current = null;
+            r = await api(`/memos/${id}`, {
+              method: "PUT",
+              body: JSON.stringify({ content: value, base: loadedAt.current }),
+            });
+          }
+        }
+      }
       if (r.status === 409) {
         // genuinely changed in another session — let the user choose
         conflictRef.current = true;
@@ -502,6 +528,7 @@ export default function App() {
         return;
       }
       const { title, updated_at } = (await r.json()) as { title: string; updated_at: number };
+      unacked.current = null; // confirmed landed — no longer un-acked
       kv.remove(DRAFT + id); // synced — drop the local draft
       kv.set(CONTENT_CACHE + id, value); // cache for offline read
       setOffline(false);
@@ -512,7 +539,11 @@ export default function App() {
       }
       setSaving(false);
     } catch {
-      // network failure — the draft in localStorage is the safety net; retry later
+      // network failure — the server MAY have committed this write before the
+      // response was lost, so remember it: a later 409 against this content is
+      // our own edit, not a foreign conflict. The localStorage draft is the
+      // safety net for retry.
+      unacked.current = { id, value };
       setOffline(true);
       setSaving(false);
     } finally {
@@ -554,6 +585,7 @@ export default function App() {
     const memo = (await (await api(`/memos/${id}`)).json()) as Memo;
     setContent(memo.content);
     loadedAt.current = memo.updated_at;
+    unacked.current = null;
     conflictRef.current = false;
     setConflict(false);
   }
@@ -570,6 +602,7 @@ export default function App() {
     });
     const { updated_at } = (await r.json()) as { updated_at: number };
     loadedAt.current = updated_at;
+    unacked.current = null;
   }
 
   // memo was trashed elsewhere — save the on-screen content as a brand-new memo
@@ -711,6 +744,10 @@ export default function App() {
           body: JSON.stringify({ content: contentRef.current }),
           keepalive: true,
         });
+        // this keepalive write has no base (force-overwrite) and we'll never see
+        // its ack — record it so that if the user chooses to STAY, the next save
+        // recognises the bumped server version as our own, not a phantom conflict.
+        unacked.current = { id, value: contentRef.current };
         e.preventDefault();
         e.returnValue = ""; // triggers the browser's native "Leave site?" confirm
       }

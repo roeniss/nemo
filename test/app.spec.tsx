@@ -1005,3 +1005,1085 @@ describe("extra branches", () => {
     );
   });
 });
+
+// ===========================================================================
+// COVERAGE FILL — remaining branches/functions
+// ===========================================================================
+describe("theme preference init", () => {
+  it("reads a saved light preference on boot", async () => {
+    authedBoot();
+    localStorage.setItem("qm-theme", "light");
+    // a theme-color meta present + light theme exercises the "#ffffff" ternary arm
+    const meta = document.createElement("meta");
+    meta.setAttribute("name", "theme-color");
+    meta.setAttribute("content", "#000000");
+    document.head.appendChild(meta);
+    try {
+      const { container } = render(<App />);
+      await waitFor(() => expect(container.querySelector(".app")).toBeTruthy());
+      await waitFor(() => expect(document.documentElement.dataset.theme).toBe("light"));
+      expect(meta.getAttribute("content")).toBe("#ffffff");
+      // the toggle reflects the light preference
+      expect(container.querySelector(".theme-toggle")?.textContent).toBe("☀️");
+    } finally {
+      meta.remove();
+    }
+  });
+
+  it("reads a saved dark preference on boot and keeps the theme-color meta in sync", async () => {
+    authedBoot();
+    localStorage.setItem("qm-theme", "dark");
+    // install a theme-color meta so the dark ternary arm (#1a1a1a) is exercised
+    const meta = document.createElement("meta");
+    meta.setAttribute("name", "theme-color");
+    meta.setAttribute("content", "#ffffff");
+    document.head.appendChild(meta);
+    try {
+      const { container } = render(<App />);
+      await waitFor(() => expect(container.querySelector(".app")).toBeTruthy());
+      await waitFor(() => expect(document.documentElement.dataset.theme).toBe("dark"));
+      expect(meta.getAttribute("content")).toBe("#1a1a1a");
+      expect(container.querySelector(".theme-toggle")?.textContent).toBe("🌙");
+    } finally {
+      meta.remove();
+    }
+  });
+});
+
+describe("flush with a pending timer", () => {
+  it("flushes an armed debounced save when leaving a non-fresh memo", async () => {
+    authedBoot();
+    const a = server.seed({ title: "Aaa", content: "# Aaa\n\nalpha" });
+    const b = server.seed({ title: "Bbb", content: "# Bbb\n\nbeta" });
+    location.hash = "#" + a.id;
+    const { container } = render(<App />);
+    await waitFor(() =>
+      expect((container.querySelector("textarea.editor") as HTMLTextAreaElement)?.value).toContain("alpha")
+    );
+
+    // type into the (non-fresh) opened memo to arm timer.current, but DON'T let the
+    // debounce fire; then open another memo → leaveCurrent → flush() with timer set
+    const ta = container.querySelector("textarea.editor") as HTMLTextAreaElement;
+    await act(async () => {
+      fireEvent.input(ta, { target: { value: "# Aaa\n\nalpha edited inflight" } });
+    });
+    const li = Array.from(container.querySelectorAll(".memo-list li")).find(
+      (el) => el.querySelector(".memo-title")?.textContent === "Bbb"
+    )!;
+    await act(async () => {
+      fireEvent.click(li);
+    });
+    // flush() ran save(a.id, ...) synchronously on leave → server has the edit
+    await waitFor(() => expect(server.memos.find((m) => m.id === a.id)?.content).toContain("alpha edited inflight"));
+    expect(b).toBeTruthy();
+  });
+});
+
+describe("openMemo temp + draft branches", () => {
+  it("opens a temp memo (id<0) with a local DRAFT and returns early without a fetch", async () => {
+    authedBoot();
+    // keep the server unreachable for POSTs so materializeTemps can't push (and
+    // remove) the content temp during boot — it must survive with its DRAFT.
+    server.opts.postThrows = true;
+    // a content temp (id<0, below the -20 clearKv floor so its DRAFT survives the
+    // beforeEach wipe) that we then open via its sidebar row.
+    localStorage.setItem(TEMPS_KEY, JSON.stringify([{ id: -33, title: "TempDraft", updated_at: 9_999_999 }]));
+    kv.set(DRAFT + -33, "# TempDraft\n\ndraft-only body");
+    location.hash = "";
+    const { container } = render(<App />);
+    await waitFor(() => expect(container.querySelector(".status.offline")).toBeTruthy());
+    await waitFor(() => {
+      const titles = Array.from(container.querySelectorAll(".memo-title")).map((e) => e.textContent);
+      expect(titles).toContain("TempDraft");
+    });
+
+    // count per-memo GETs so we can prove opening the temp issues NONE (id<0 return)
+    const memoGets = () =>
+      server.fetchImpl.mock.calls.filter(
+        (c) => /\/memos\/-?\d+$/.test(String(c[0])) && (c[1]?.method || "GET") === "GET"
+      ).length;
+    const before = memoGets();
+    const li = Array.from(container.querySelectorAll(".memo-list li")).find(
+      (el) => el.querySelector(".memo-title")?.textContent === "TempDraft"
+    )!;
+    await act(async () => {
+      fireEvent.click(li);
+    });
+    // draft beats cache → DRAFT shown instantly; id<0 → early return, no per-memo GET
+    await waitFor(() =>
+      expect((container.querySelector("textarea.editor") as HTMLTextAreaElement)?.value).toContain("draft-only body")
+    );
+    expect(memoGets()).toBe(before);
+  });
+});
+
+describe("materializeTemps no-draft temp", () => {
+  it("treats a temp with no DRAFT as blank and skips it", async () => {
+    authedBoot();
+    // a temp present in qm-temps but with NO draft entry → kv.get returns null →
+    // body = "" (the ?? "" arm) → isBlank → continue (skipped, not POSTed)
+    localStorage.setItem(TEMPS_KEY, JSON.stringify([{ id: -44, title: "NoDraft", updated_at: 5 }]));
+    const { container } = render(<App />);
+    await waitFor(() => expect(container.querySelector(".app")).toBeTruthy());
+    // never POSTed/materialized — the temp stays put
+    await new Promise((r) => setTimeout(r, 30));
+    expect(JSON.parse(localStorage.getItem(TEMPS_KEY) || "[]").some((t: { id: number }) => t.id === -44)).toBe(true);
+  });
+});
+
+describe("deleteMemo title fallback + repeated delete", () => {
+  it("uses Untitled for an empty title and clears a prior undo timer on a second delete", async () => {
+    authedBoot();
+    // seed two real memos, one with an EMPTY title so the `m?.title || \"Untitled\"` arm runs
+    const blank = server.seed({ title: "", content: "x" }); // content non-blank, title empty
+    const other = server.seed({ title: "Other", content: "# Other\n\nbody" });
+    const { container } = render(<App />);
+    await waitFor(() => expect(container.querySelectorAll(".memo-list li").length).toBeGreaterThanOrEqual(2));
+
+    // first delete → sets undoTimer
+    const blankLi = Array.from(container.querySelectorAll(".memo-list li")).find(
+      (el) => el.querySelector(".memo-title")?.textContent === "Untitled"
+    )!;
+    await act(async () => {
+      fireEvent.click(blankLi.querySelector(".del")!);
+    });
+    await waitFor(() => expect(container.querySelector(".toast")?.textContent).toContain('Deleted "Untitled"'));
+
+    // second delete WITHOUT undoing → undoTimer.current already set → clearTimeout arm
+    const otherLi = Array.from(container.querySelectorAll(".memo-list li")).find(
+      (el) => el.querySelector(".memo-title")?.textContent === "Other"
+    )!;
+    await act(async () => {
+      fireEvent.click(otherLi.querySelector(".del")!);
+    });
+    await waitFor(() => expect(container.querySelector(".toast")?.textContent).toContain('Deleted "Other"'));
+    expect(blank).toBeTruthy();
+    expect(other).toBeTruthy();
+  });
+});
+
+describe("empty-title rendering", () => {
+  it("renders Untitled for an empty-title memo in the sidebar and trash", async () => {
+    authedBoot();
+    server.seed({ title: "", content: "y" }); // empty-title live memo → sidebar Untitled
+    const { container } = render(<App />);
+    await waitFor(() => {
+      const titles = Array.from(container.querySelectorAll(".memo-title")).map((e) => e.textContent);
+      expect(titles).toContain("Untitled");
+    });
+
+    // now put an empty-title row in the trash and open the Trash tab (838 arm)
+    const t = server.seed({ title: "", content: "z" });
+    server.trash.push(...server.memos.splice(server.memos.indexOf(t), 1));
+    const tabs = container.querySelectorAll(".side-tabs button");
+    await act(async () => {
+      fireEvent.click(tabs[1]); // Trash
+    });
+    await waitFor(() => {
+      const tt = Array.from(container.querySelectorAll(".memo-list .memo-title")).map((e) => e.textContent);
+      expect(tt).toContain("Untitled");
+    });
+  });
+});
+
+describe("save serialization on a temp with siblings", () => {
+  it("saves a temp memo and leaves sibling rows untouched (false arm of the title map)", async () => {
+    authedBoot();
+    // keep POSTs failing so boot's materializeTemps can't push the content sibling
+    // (-56) away — both temps must persist so the save() .map hits the `: t` arm
+    server.opts.postThrows = true;
+    // two temps so save()'s .map over temps/memos hits the `: t` / `: x` false arm
+    localStorage.setItem(
+      TEMPS_KEY,
+      JSON.stringify([
+        { id: -55, title: "Untitled", updated_at: 3 },
+        { id: -56, title: "Sibling", updated_at: 2 },
+      ])
+    );
+    kv.set(DRAFT + -55, "# ");
+    kv.set(DRAFT + -56, "# Sibling\n\nsibling body");
+    location.hash = "#-55";
+    const { container } = render(<App />);
+    await waitFor(() => expect(container.querySelector("textarea.editor")).toBeTruthy());
+    await waitFor(() => {
+      const titles = Array.from(container.querySelectorAll(".memo-title")).map((e) => e.textContent);
+      expect(titles).toContain("Sibling");
+    });
+
+    // type into the open temp (-55) → save() updates ONLY -55, mapping past -56
+    const ta = container.querySelector("textarea.editor") as HTMLTextAreaElement;
+    await act(async () => {
+      fireEvent.input(ta, { target: { value: "# Renamed temp\n\nbody" } });
+    });
+    await waitFor(() => {
+      const temps = JSON.parse(localStorage.getItem(TEMPS_KEY) || "[]");
+      const me = temps.find((t: { id: number }) => t.id === -55);
+      const sib = temps.find((t: { id: number }) => t.id === -56);
+      expect(me?.title).toBe("Renamed temp");
+      expect(sib?.title).toBe("Sibling"); // sibling untouched
+    });
+  });
+});
+
+describe("onEdit guard while a banner is up", () => {
+  it("does not re-arm a save while the conflict banner is showing", async () => {
+    authedBoot();
+    const row = server.seed({ title: "Guard", content: "# Guard" });
+    location.hash = "#" + row.id;
+    const { container } = render(<App />);
+    await waitFor(() => expect(container.querySelector("textarea.editor")).toBeTruthy());
+
+    server.opts.putStatus = 409;
+    const ta = container.querySelector("textarea.editor") as HTMLTextAreaElement;
+    await act(async () => {
+      fireEvent.input(ta, { target: { value: "# Guard\n\nmine" } });
+    });
+    await waitFor(() => expect(container.querySelector(".conflict")).toBeTruthy());
+    // let any debounced PUT from the first edit fully settle so the count is stable
+    await new Promise((r) => setTimeout(r, 50));
+
+    // keep PUT at 409; type again while the banner is up → onEdit persists the draft
+    // (kv.set) but returns at the conflict guard, arming no new debounced save.
+    const puts = () =>
+      server.fetchImpl.mock.calls.filter(
+        (c) => String(c[0]).includes(`/memos/${row.id}`) && (c[1] as RequestInit)?.method === "PUT"
+      ).length;
+    const before = puts();
+    await act(async () => {
+      fireEvent.input(ta, { target: { value: "# Guard\n\nmine more typing" } });
+    });
+    await new Promise((r) => setTimeout(r, 100));
+    // no additional PUT was issued by the guarded edit; the banner is still up
+    expect(puts()).toBe(before);
+    expect(container.querySelector(".conflict")).toBeTruthy();
+    // the draft is still persisted locally (kv.set runs before the guard returns)
+    expect(kv.get(DRAFT + row.id)).toContain("mine more typing");
+  });
+});
+
+describe("overwrite success", () => {
+  it("overwrite forces a PUT and clears the conflict", async () => {
+    authedBoot();
+    const row = server.seed({ title: "Ow", content: "# Ow\n\nbase" });
+    location.hash = "#" + row.id;
+    const { container } = render(<App />);
+    await waitFor(() =>
+      expect((container.querySelector("textarea.editor") as HTMLTextAreaElement)?.value).toContain("base")
+    );
+    server.opts.putStatus = 409;
+    const ta = container.querySelector("textarea.editor") as HTMLTextAreaElement;
+    await act(async () => {
+      fireEvent.input(ta, { target: { value: "# Ow\n\nlocal" } });
+    });
+    await waitFor(() => expect(container.querySelector(".conflict")).toBeTruthy());
+    server.opts.putStatus = 0;
+    const buttons = container.querySelectorAll(".conflict button");
+    await act(async () => {
+      fireEvent.click(buttons[1]); // Overwrite (id != null branch)
+    });
+    await waitFor(() => expect(container.querySelector(".conflict")).toBeFalsy());
+    await waitFor(() => expect(server.memos.find((m) => m.id === row.id)?.content).toContain("local"));
+  });
+});
+
+describe("conflict/deleted resolvers with a null current id", () => {
+  // Deleting the open memo from the sidebar nulls currentId WITHOUT clearing the
+  // conflict/deleted banner (deleteMemo touches neither flag), so the banner's
+  // resolver buttons can be clicked while currentIdRef.current === null — that's
+  // the `if (id == null) return` guard in reloadCurrent / overwrite / recoverAsNew.
+
+  async function raiseConflictThenDeleteOpen(container: HTMLElement, row: { id: number }) {
+    server.opts.putStatus = 409;
+    const ta = container.querySelector("textarea.editor") as HTMLTextAreaElement;
+    await act(async () => {
+      fireEvent.input(ta, { target: { value: "# X\n\nmine" } });
+    });
+    await waitFor(() => expect(container.querySelector(".conflict")).toBeTruthy());
+    server.opts.putStatus = 0;
+    // delete the (still-listed) open memo via its × → currentId becomes null,
+    // but the conflict banner stays mounted
+    const li = Array.from(container.querySelectorAll(".memo-list li")).find(
+      (el) => el.className.includes("active")
+    ) as HTMLElement | undefined;
+    const target =
+      li ?? (Array.from(container.querySelectorAll(".memo-list li")).find((el) =>
+        el.querySelector(".memo-title")
+      ) as HTMLElement);
+    await act(async () => {
+      fireEvent.click(target.querySelector(".del")!);
+    });
+    await waitFor(() => expect(container.querySelector(".center")).toBeTruthy()); // editor gone (id null)
+    expect(container.querySelector(".conflict")).toBeTruthy(); // banner still up
+  }
+
+  it("reloadCurrent and overwrite return early when current id is null", async () => {
+    authedBoot();
+    const row = server.seed({ title: "X", content: "# X\n\nv1" });
+    location.hash = "#" + row.id;
+    const { container } = render(<App />);
+    await waitFor(() =>
+      expect((container.querySelector("textarea.editor") as HTMLTextAreaElement)?.value).toContain("v1")
+    );
+    await raiseConflictThenDeleteOpen(container as unknown as HTMLElement, row);
+
+    const buttons = container.querySelectorAll(".conflict button");
+    // Reload → reloadCurrent: id == null → return (no crash, banner unchanged)
+    await act(async () => {
+      fireEvent.click(buttons[0]);
+    });
+    await new Promise((r) => setTimeout(r, 10));
+    expect(container.querySelector(".conflict")).toBeTruthy();
+    // Overwrite → overwrite: id == null → return
+    await act(async () => {
+      fireEvent.click(container.querySelectorAll(".conflict button")[1]);
+    });
+    await new Promise((r) => setTimeout(r, 10));
+    expect(container.querySelector(".app")).toBeTruthy();
+  });
+
+  it("recoverAsNew returns early when current id is null", async () => {
+    authedBoot();
+    const row = server.seed({ title: "Y", content: "# Y\n\nv1" });
+    location.hash = "#" + row.id;
+    const { container } = render(<App />);
+    await waitFor(() =>
+      expect((container.querySelector("textarea.editor") as HTMLTextAreaElement)?.value).toContain("v1")
+    );
+
+    // raise the DELETED banner (404 PUT), then delete the open memo from the sidebar
+    server.opts.putStatus = 404;
+    const ta = container.querySelector("textarea.editor") as HTMLTextAreaElement;
+    await act(async () => {
+      fireEvent.input(ta, { target: { value: "# Y\n\nbye" } });
+    });
+    await waitFor(() => expect(container.querySelector(".conflict span")?.textContent).toContain("삭제"));
+    server.opts.putStatus = 0;
+
+    const activeLi = Array.from(container.querySelectorAll(".memo-list li")).find((el) =>
+      el.className.includes("active")
+    ) as HTMLElement | undefined;
+    const target =
+      activeLi ?? (container.querySelector(".memo-list li") as HTMLElement);
+    await act(async () => {
+      fireEvent.click(target.querySelector(".del")!);
+    });
+    await waitFor(() => expect(container.querySelector(".center")).toBeTruthy());
+    expect(container.querySelector(".conflict")).toBeTruthy(); // deleted banner still up
+
+    const before = server.memos.length;
+    // 새 메모로 복구 → recoverAsNew: id == null → return (no new memo created)
+    await act(async () => {
+      fireEvent.click(container.querySelectorAll(".conflict button")[0]);
+    });
+    await new Promise((r) => setTimeout(r, 10));
+    expect(server.memos.length).toBe(before);
+    expect(container.querySelector(".app")).toBeTruthy();
+  });
+});
+
+describe("recoverAsNew success path", () => {
+  it("creates a brand-new memo holding the rescued content and drops the old row", async () => {
+    authedBoot();
+    const gone = server.seed({ title: "RescueMe", content: "# RescueMe\n\norig" });
+    const keep = server.seed({ title: "Keep", content: "# Keep\n\nkeep body" });
+    location.hash = "#" + gone.id;
+    const { container } = render(<App />);
+    await waitFor(() =>
+      expect((container.querySelector("textarea.editor") as HTMLTextAreaElement)?.value).toContain("orig")
+    );
+
+    server.opts.putStatus = 404; // deleted-elsewhere banner
+    const ta = container.querySelector("textarea.editor") as HTMLTextAreaElement;
+    await act(async () => {
+      fireEvent.input(ta, { target: { value: "# RescueMe\n\nrescued for real" } });
+    });
+    await waitFor(() => expect(container.querySelector(".conflict span")?.textContent).toContain("삭제"));
+
+    server.opts.putStatus = 0; // recoverAsNew's POST+PUT succeed now
+    const btns = container.querySelectorAll(".conflict button");
+    await act(async () => {
+      fireEvent.click(btns[0]); // 새 메모로 복구
+    });
+    await waitFor(() => expect(container.querySelector(".conflict")).toBeFalsy());
+    // a NEW server memo holds the rescued content; the old row was filtered out
+    await waitFor(() => expect(server.memos.some((m) => m.content.includes("rescued for real"))).toBe(true));
+    await waitFor(() =>
+      expect((container.querySelector("textarea.editor") as HTMLTextAreaElement)?.value).toContain("rescued for real")
+    );
+    expect(keep).toBeTruthy();
+  });
+});
+
+describe("background sync edge branches", () => {
+  it("skips sync entirely when the document is hidden", async () => {
+    authedBoot();
+    const row = server.seed({ title: "Hid", content: "# Hid\n\nv1" });
+    location.hash = "#" + row.id;
+    const { container } = render(<App />);
+    await waitFor(() =>
+      expect((container.querySelector("textarea.editor") as HTMLTextAreaElement)?.value).toContain("v1")
+    );
+
+    // change elsewhere, but hide the tab → sync() returns at document.hidden
+    row.content = "# Hid\n\nv2 remote";
+    row.updated_at = server.now() + 100000;
+    const hiddenSpy = vi.spyOn(document, "hidden", "get").mockReturnValue(true);
+    const memosBefore = server.fetchImpl.mock.calls.filter(
+      (c) => String(c[0]).endsWith("/memos") && (c[1]?.method || "GET") === "GET"
+    ).length;
+    await act(async () => {
+      window.dispatchEvent(new Event("focus"));
+    });
+    await new Promise((r) => setTimeout(r, 30));
+    const memosAfter = server.fetchImpl.mock.calls.filter(
+      (c) => String(c[0]).endsWith("/memos") && (c[1]?.method || "GET") === "GET"
+    ).length;
+    expect(memosAfter).toBe(memosBefore); // no list fetch happened
+    // editor still shows the old content (no reload)
+    expect((container.querySelector("textarea.editor") as HTMLTextAreaElement).value).toContain("v1");
+    hiddenSpy.mockRestore();
+  });
+
+  it("returns early when the sync list fetch is not ok", async () => {
+    authedBoot();
+    const row = server.seed({ title: "NotOk", content: "# NotOk\n\nv1" });
+    location.hash = "#" + row.id;
+    const { container } = render(<App />);
+    await waitFor(() =>
+      expect((container.querySelector("textarea.editor") as HTMLTextAreaElement)?.value).toContain("v1")
+    );
+
+    // make the next GET /memos return a non-ok status → sync's `!r.ok` early return
+    const orig = server.fetchImpl;
+    let blocked = true;
+    globalThis.fetch = vi.fn(async (input: any, init: any) => {
+      const url = String(input);
+      if (blocked && url.endsWith("/memos") && (init?.method || "GET") === "GET") {
+        return new Response("", { status: 500 });
+      }
+      return orig(input, init);
+    }) as unknown as typeof fetch;
+    await act(async () => {
+      window.dispatchEvent(new Event("focus"));
+    });
+    await new Promise((r) => setTimeout(r, 30));
+    blocked = false;
+    // still rendered, content unchanged (sync bailed at !r.ok)
+    expect((container.querySelector("textarea.editor") as HTMLTextAreaElement).value).toContain("v1");
+  });
+
+  it("returns null and bails when the sync list fetch rejects", async () => {
+    authedBoot();
+    const row = server.seed({ title: "Rej", content: "# Rej\n\nv1" });
+    location.hash = "#" + row.id;
+    const { container } = render(<App />);
+    await waitFor(() =>
+      expect((container.querySelector("textarea.editor") as HTMLTextAreaElement)?.value).toContain("v1")
+    );
+    // make the sync list GET reject → the `.catch(() => null)` arm → `!r` early return.
+    const orig = server.fetchImpl;
+    let blocked = true;
+    globalThis.fetch = vi.fn(async (input: any, init: any) => {
+      const url = String(input);
+      if (blocked && url.endsWith("/memos") && (init?.method || "GET") === "GET") {
+        throw new Error("offline");
+      }
+      return orig(input, init);
+    }) as unknown as typeof fetch;
+    await act(async () => {
+      window.dispatchEvent(new Event("focus"));
+    });
+    await new Promise((r) => setTimeout(r, 30));
+    blocked = false;
+    expect(container.querySelector(".app")).toBeTruthy();
+  });
+
+  it("skips the per-memo reload during sync while a conflict banner is up", async () => {
+    authedBoot();
+    const row = server.seed({ title: "ConflictSync", content: "# ConflictSync\n\nv1" });
+    location.hash = "#" + row.id;
+    const { container } = render(<App />);
+    await waitFor(() =>
+      expect((container.querySelector("textarea.editor") as HTMLTextAreaElement)?.value).toContain("v1")
+    );
+
+    // raise a conflict so conflictRef.current is true (a synchronous ref) — the sync
+    // guard's `conflictRef.current` arm then makes the per-memo reload `return`.
+    server.opts.putStatus = 409;
+    const ta = container.querySelector("textarea.editor") as HTMLTextAreaElement;
+    await act(async () => {
+      fireEvent.input(ta, { target: { value: "# ConflictSync\n\nmine" } });
+    });
+    await waitFor(() => expect(container.querySelector(".conflict")).toBeTruthy());
+
+    // change the memo remotely; a focus sync runs the list but the guard returns at
+    // conflictRef before adopting remote content (so the editor is untouched).
+    server.opts.putStatus = 0;
+    row.content = "# ConflictSync\n\nv2 remote";
+    row.updated_at = 9_999_999;
+    await act(async () => {
+      window.dispatchEvent(new Event("focus"));
+    });
+    await new Promise((r) => setTimeout(r, 40));
+    // still showing the local edit, banner still up — no remote adoption happened
+    expect((container.querySelector("textarea.editor") as HTMLTextAreaElement).value).toContain("mine");
+    expect(container.querySelector(".conflict")).toBeTruthy();
+  });
+
+  it("skips the per-memo reload during sync while an unsynced draft is pending", async () => {
+    authedBoot();
+    const row = server.seed({ title: "DraftPend", content: "# DraftPend\n\nv1" });
+    location.hash = "#" + row.id;
+    const { container } = render(<App />);
+    await waitFor(() =>
+      expect((container.querySelector("textarea.editor") as HTMLTextAreaElement)?.value).toContain("v1")
+    );
+    await waitFor(() => expect(kv.get(DRAFT + row.id)).toBeNull());
+
+    // Put an unsynced DRAFT in place WITHOUT typing (so timer.current stays null and
+    // the 623 guard falls through), and gate PUTs so recover()'s push to clear that
+    // draft stays in flight while sync reaches the `kv.get(DRAFT+id) != null` guard.
+    let release: () => void = () => {};
+    const gate = new Promise<void>((r) => (release = r));
+    const orig = server.fetchImpl;
+    globalThis.fetch = vi.fn(async (input: any, init: any) => {
+      if ((init?.method || "GET") === "PUT" && String(input).includes(`/memos/${row.id}`)) {
+        await gate; // hold recover()'s save in flight → DRAFT not yet removed
+      }
+      return orig(input, init);
+    }) as unknown as typeof fetch;
+    kv.set(DRAFT + row.id, "# DraftPend\n\nunsynced local");
+
+    // a newer remote version exists; the draft guard must prevent adopting it
+    row.content = "# DraftPend\n\nv2 remote";
+    row.updated_at = 9_999_999;
+    await act(async () => {
+      window.dispatchEvent(new Event("focus"));
+    });
+    await new Promise((r) => setTimeout(r, 40));
+    // sync hit `if (kv.get(DRAFT+id) != null) return` → no remote adoption
+    expect((container.querySelector("textarea.editor") as HTMLTextAreaElement).value).not.toContain("v2 remote");
+    release();
+    await new Promise((r) => setTimeout(r, 10));
+  });
+
+  it("skips sync reload for a temp memo (id < 0)", async () => {
+    authedBoot();
+    // POSTs stay failing so the open temp can never materialize into a positive id —
+    // it remains id<0 when the focus sync reaches the per-memo reload guard.
+    server.opts.postThrows = true; // boot newMemo → temp (id<0) open
+    const { container } = render(<App />);
+    await waitFor(() => expect(container.querySelector(".status.offline")).toBeTruthy());
+    await waitFor(() => expect(container.querySelector("textarea.editor")).toBeTruthy());
+    // make the list GET succeed (already does) while keeping POST broken; the focus
+    // sync runs the list, then the guard's `id < 0` arm returns before any reload.
+    await act(async () => {
+      window.dispatchEvent(new Event("focus"));
+    });
+    await new Promise((r) => setTimeout(r, 30));
+    // still the open temp, no per-memo reload happened
+    expect(container.querySelector("textarea.editor")).toBeTruthy();
+    expect(container.querySelector(".app")).toBeTruthy();
+  });
+
+});
+
+describe("beforeunload temp + in-flight branches", () => {
+  it("does nothing on unload for a temp memo (id < 0)", async () => {
+    authedBoot();
+    server.opts.postThrows = true; // boot → temp memo open
+    const { container } = render(<App />);
+    await waitFor(() => expect(container.querySelector(".status.offline")).toBeTruthy());
+    await waitFor(() => expect(container.querySelector("textarea.editor")).toBeTruthy());
+
+    const before = server.fetchImpl.mock.calls.length;
+    await act(async () => {
+      window.dispatchEvent(new Event("beforeunload"));
+    });
+    // id < 0 → handler returns immediately; no purge/PUT fetch was issued
+    const after = server.fetchImpl.mock.calls
+      .slice(before)
+      .find((c) => String(c[0]).includes("purge=1") || (c[1] as RequestInit)?.method === "PUT");
+    expect(after).toBeFalsy();
+  });
+
+  it("warns on unload when a save is in flight (inFlight arm)", async () => {
+    authedBoot();
+    const row = server.seed({ title: "Inflight", content: "# Inflight\n\nv1" });
+    location.hash = "#" + row.id;
+    const { container } = render(<App />);
+    await waitFor(() => expect(container.querySelector("textarea.editor")).toBeTruthy());
+
+    // gate the PUT so a save stays in flight while we fire beforeunload
+    let release: () => void = () => {};
+    const gate = new Promise<void>((r) => (release = r));
+    const orig = server.fetchImpl;
+    globalThis.fetch = vi.fn(async (input: any, init: any) => {
+      if ((init?.method || "GET") === "PUT" && String(input).includes(`/memos/${row.id}`)) {
+        await gate;
+      }
+      return orig(input, init);
+    }) as unknown as typeof fetch;
+
+    const ta = container.querySelector("textarea.editor") as HTMLTextAreaElement;
+    await act(async () => {
+      fireEvent.input(ta, { target: { value: "# Inflight\n\nnow editing" } });
+      fireEvent.keyDown(window, { key: "s", metaKey: true }); // force save → inFlight true
+    });
+    // memo has content → not fresh-blank, so the in-flight warn branch is reached;
+    // fire unload while the PUT is gated (timer cleared by Cmd+S, but inFlight true)
+    const evt = new Event("beforeunload", { cancelable: true }) as BeforeUnloadEvent;
+    await act(async () => {
+      window.dispatchEvent(evt);
+    });
+    expect(evt.defaultPrevented).toBe(true);
+    release();
+    await new Promise((r) => setTimeout(r, 10));
+  });
+});
+
+describe("Alt nav guard branches", () => {
+  it("ignores Alt with a non-J/K key", async () => {
+    authedBoot();
+    server.seed({ title: "N1", content: "# N1" });
+    server.seed({ title: "N2", content: "# N2" });
+    const { container } = render(<App />);
+    await waitFor(() => expect(container.querySelectorAll(".memo-list li").length).toBeGreaterThanOrEqual(2));
+    await act(async () => {
+      fireEvent.click(container.querySelector(".memo-list li")!);
+    });
+    await waitFor(() => expect(container.querySelector(".memo-list li.active")).toBeTruthy());
+    const activeBefore = container.querySelector(".memo-list li.active")?.textContent;
+    // Alt + a different physical key → the `code !== KeyK && code !== KeyJ` guard
+    await act(async () => {
+      fireEvent.keyDown(window, { code: "KeyL", altKey: true });
+    });
+    expect(container.querySelector(".memo-list li.active")?.textContent).toBe(activeBefore);
+  });
+
+  it("does nothing on Alt+J when the visible list is empty", async () => {
+    authedBoot();
+    server.seed({ title: "Solo", content: "# Solo" });
+    const { container } = render(<App />);
+    await waitFor(() => expect(container.querySelectorAll(".memo-list li").length).toBeGreaterThanOrEqual(1));
+    // filter so the visible list is empty
+    await act(async () => {
+      fireEvent.input(container.querySelector(".search")!, { target: { value: "zzz-no-match" } });
+    });
+    await waitFor(() => expect(container.querySelector(".empty")?.textContent).toBe("No matches"));
+    // Alt+J with an empty list → `if (!list.length) return`
+    await act(async () => {
+      fireEvent.keyDown(window, { code: "KeyJ", altKey: true });
+    });
+    expect(container.querySelector(".empty")?.textContent).toBe("No matches");
+  });
+
+  it("wraps to the first when the current id is not in the visible list (Alt+J)", async () => {
+    authedBoot();
+    server.seed({ title: "Wone", content: "# Wone" });
+    server.seed({ title: "Wtwo", content: "# Wtwo" });
+    const { container } = render(<App />);
+    await waitFor(() => expect(container.querySelectorAll(".memo-list li").length).toBeGreaterThanOrEqual(2));
+    // boot opened a fresh memo whose id is NOT in this seeded list (idx === -1).
+    // Alt+J → idx -1 → down → index 0 (first visible).
+    await act(async () => {
+      fireEvent.keyDown(window, { code: "KeyJ", altKey: true }); // -> first
+    });
+    await waitFor(() => expect(container.querySelector(".memo-list li.active")).toBeTruthy());
+    expect(container.querySelector(".memo-list li.active")?.textContent).toBeTruthy();
+  });
+
+  it("wraps to the last when the current id is not in the list and going up (Alt+K)", async () => {
+    authedBoot();
+    server.seed({ title: "Kone", content: "# Kone" });
+    server.seed({ title: "Ktwo", content: "# Ktwo" });
+    const { container } = render(<App />);
+    await waitFor(() => expect(container.querySelectorAll(".memo-list li").length).toBeGreaterThanOrEqual(2));
+    // boot's fresh memo isn't in the seeded list → idx -1 → up → length-1 (last)
+    await act(async () => {
+      fireEvent.keyDown(window, { code: "KeyK", altKey: true });
+    });
+    await waitFor(() => expect(container.querySelector(".memo-list li.active")).toBeTruthy());
+  });
+
+  it("clamps at the ends (Alt+J on the last, Alt+K on the first)", async () => {
+    authedBoot();
+    server.seed({ title: "Cone", content: "# Cone" });
+    server.seed({ title: "Ctwo", content: "# Ctwo" });
+    const { container } = render(<App />);
+    await waitFor(() => expect(container.querySelectorAll(".memo-list li").length).toBeGreaterThanOrEqual(2));
+
+    const lis = () => Array.from(container.querySelectorAll(".memo-list li"));
+    // First open a seeded memo to flush the boot's fresh-blank "Untitled" memo out of
+    // the list (leaveCurrent purges it), so the list is the stable {Cone, Ctwo}.
+    await act(async () => {
+      fireEvent.click(
+        Array.from(lis()).find((el) => el.querySelector(".memo-title")?.textContent === "Cone")!
+      );
+    });
+    await waitFor(() => {
+      const titles = Array.from(container.querySelectorAll(".memo-title")).map((e) => e.textContent);
+      expect(titles).not.toContain("Untitled");
+      expect(titles).toContain("Cone");
+      expect(titles).toContain("Ctwo");
+    });
+
+    // open the LAST visible memo
+    await act(async () => {
+      fireEvent.click(lis()[lis().length - 1]);
+    });
+    await waitFor(() => expect(container.querySelector(".memo-list li.active")).toBeTruthy());
+    const lastTitle = container.querySelector(".memo-list li.active")?.textContent;
+    // Alt+J at the bottom → next >= length → clamp (no change)
+    await act(async () => {
+      fireEvent.keyDown(window, { code: "KeyJ", altKey: true });
+    });
+    await new Promise((r) => setTimeout(r, 10));
+    expect(container.querySelector(".memo-list li.active")?.textContent).toBe(lastTitle);
+
+    // open the FIRST visible memo, Alt+K at the top → next < 0 → clamp
+    await act(async () => {
+      fireEvent.click(lis()[0]);
+    });
+    await waitFor(() => expect(container.querySelector(".memo-list li.active")).toBeTruthy());
+    const firstTitle = container.querySelector(".memo-list li.active")?.textContent;
+    await act(async () => {
+      fireEvent.keyDown(window, { code: "KeyK", altKey: true });
+    });
+    await new Promise((r) => setTimeout(r, 10));
+    expect(container.querySelector(".memo-list li.active")?.textContent).toBe(firstTitle);
+  });
+});
+
+describe("onDrop no-files branch", () => {
+  it("does nothing when a drop carries no files", async () => {
+    authedBoot();
+    const row = server.seed({ title: "Drp", content: "# Drp\n\nbody" });
+    location.hash = "#" + row.id;
+    const { container } = render(<App />);
+    await waitFor(() =>
+      expect((container.querySelector("textarea.editor") as HTMLTextAreaElement)?.value).toContain("body")
+    );
+    const ta = container.querySelector("textarea.editor") as HTMLTextAreaElement;
+    const before = ta.value;
+    const memosBefore = server.memos.length;
+    // a drop event with an empty files list → `if (files && files.length)` false arm
+    const dt = { files: [], types: [] } as unknown as DataTransfer;
+    await act(async () => {
+      fireEvent.drop(ta, { dataTransfer: dt });
+    });
+    await new Promise((r) => setTimeout(r, 10));
+    expect((container.querySelector("textarea.editor") as HTMLTextAreaElement).value).toBe(before);
+    expect(server.memos.length).toBe(memosBefore);
+  });
+});
+
+describe("openMemo temp with no draft (id<0 empty arm)", () => {
+  it("opens a temp memo (id<0) with no DRAFT, showing an empty editor", async () => {
+    authedBoot();
+    server.opts.postThrows = true; // keep the temp from materializing (and skips blanks anyway)
+    // a temp present in the list with NO draft → openMemo: draft is null → the
+    // `id < 0 ? "" : ...` ternary takes the empty-string arm.
+    localStorage.setItem(TEMPS_KEY, JSON.stringify([{ id: -66, title: "EmptyTemp", updated_at: 9_999_999 }]));
+    location.hash = "";
+    const { container } = render(<App />);
+    await waitFor(() => expect(container.querySelector(".status.offline")).toBeTruthy());
+    await waitFor(() => {
+      const titles = Array.from(container.querySelectorAll(".memo-title")).map((e) => e.textContent);
+      expect(titles).toContain("EmptyTemp");
+    });
+    const li = Array.from(container.querySelectorAll(".memo-list li")).find(
+      (el) => el.querySelector(".memo-title")?.textContent === "EmptyTemp"
+    )!;
+    await act(async () => {
+      fireEvent.click(li);
+    });
+    // opened the temp with no local content → editor renders empty (id<0 "" arm)
+    await waitFor(() => expect(container.querySelector(".memo-list li.active")).toBeTruthy());
+    expect((container.querySelector("textarea.editor") as HTMLTextAreaElement).value).toBe("");
+  });
+});
+
+describe("preview too big", () => {
+  it("renders the preview-skipped placeholder for a very large document", async () => {
+    authedBoot();
+    const row = server.seed({ title: "Huge", content: "# Huge\n\nstart" });
+    location.hash = "#" + row.id;
+    const { container } = render(<App />);
+    await waitFor(() =>
+      expect((container.querySelector("textarea.editor") as HTMLTextAreaElement)?.value).toContain("start")
+    );
+    // type a >200_000-char body → usePreview flags tooBig → the skipped placeholder
+    const ta = container.querySelector("textarea.editor") as HTMLTextAreaElement;
+    const huge = "# Huge\n\n" + "a".repeat(210_000);
+    await act(async () => {
+      fireEvent.input(ta, { target: { value: huge } });
+    });
+    await waitFor(
+      () => expect(container.querySelector(".preview-skipped")).toBeTruthy(),
+      { timeout: 3000 }
+    );
+    expect(container.querySelector(".preview-skipped")?.textContent).toContain("미리보기 생략");
+  });
+});
+
+describe("discardDeleted removes the open real memo from the list", () => {
+  it("filters the trashed-elsewhere memo out of the sidebar", async () => {
+    authedBoot();
+    const row = server.seed({ title: "Discardable", content: "# Discardable\n\nbody" });
+    const keep = server.seed({ title: "Stay", content: "# Stay\n\nstay body" });
+    location.hash = "#" + row.id;
+    const { container } = render(<App />);
+    await waitFor(() =>
+      expect((container.querySelector("textarea.editor") as HTMLTextAreaElement)?.value).toContain("body")
+    );
+
+    // raise the deleted-elsewhere banner via a 404 PUT, then discard
+    server.opts.putStatus = 404;
+    const ta = container.querySelector("textarea.editor") as HTMLTextAreaElement;
+    await act(async () => {
+      fireEvent.input(ta, { target: { value: "# Discardable\n\nbye now" } });
+    });
+    await waitFor(() => expect(container.querySelector(".conflict span")?.textContent).toContain("삭제"));
+
+    const btns = container.querySelectorAll(".conflict button");
+    await act(async () => {
+      fireEvent.click(btns[1]); // 버리기 → discardDeleted (id != null → setMemos filter)
+    });
+    await waitFor(() => expect(container.querySelector(".center")).toBeTruthy());
+    // the discarded memo is gone from the sidebar; the other memo stays
+    await waitFor(() => {
+      const titles = Array.from(container.querySelectorAll(".memo-title")).map((e) => e.textContent);
+      expect(titles).not.toContain("Discardable");
+      expect(titles).toContain("Stay");
+    });
+    expect(keep).toBeTruthy();
+  });
+});
+
+describe("background sync probe rejection", () => {
+  it("does not raise the deleted banner when the 404-probe fetch rejects", async () => {
+    authedBoot();
+    const row = server.seed({ title: "Probe", content: "# Probe\n\nv1" });
+    location.hash = "#" + row.id;
+    const { container } = render(<App />);
+    await waitFor(() =>
+      expect((container.querySelector("textarea.editor") as HTMLTextAreaElement)?.value).toContain("v1")
+    );
+
+    // remove the memo from the list (so `!cur`), but make the per-memo probe GET
+    // REJECT → the `.catch(() => null)` arm → probe is null → no banner raised.
+    const orig = server.fetchImpl;
+    globalThis.fetch = vi.fn(async (input: any, init: any) => {
+      const url = String(input);
+      const method = (init?.method || "GET").toUpperCase();
+      if (url.endsWith("/memos") && method === "GET") {
+        // report a list WITHOUT this row so sync takes the `!cur` path
+        return new Response(JSON.stringify([]), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      if (method === "GET" && new RegExp(`/memos/${row.id}$`).test(url)) {
+        throw new Error("probe offline"); // probe rejects → caught → null
+      }
+      return orig(input, init);
+    }) as unknown as typeof fetch;
+
+    await act(async () => {
+      window.dispatchEvent(new Event("focus"));
+    });
+    await new Promise((r) => setTimeout(r, 40));
+    // probe rejected → null → the deleted banner is NOT shown
+    expect(container.querySelector(".conflict")).toBeFalsy();
+    expect(container.querySelector(".app")).toBeTruthy();
+  });
+});
+
+// ===========================================================================
+// COVERAGE FILL — remaining implicit-else / false-condition arms
+// ===========================================================================
+describe("deleteMemo a non-current temp (currentId !== id)", () => {
+  it("drops a temp that is not the open memo without clearing the editor", async () => {
+    authedBoot();
+    // two content temps; keep POSTs failing so neither materializes
+    server.opts.postThrows = true;
+    localStorage.setItem(
+      TEMPS_KEY,
+      JSON.stringify([
+        { id: -71, title: "OpenTemp", updated_at: 9_999_999 },
+        { id: -72, title: "OtherTemp", updated_at: 9_999_998 },
+      ])
+    );
+    kv.set(DRAFT + -71, "# OpenTemp\n\nopen body");
+    kv.set(DRAFT + -72, "# OtherTemp\n\nother body");
+    location.hash = "";
+    const { container } = render(<App />);
+    await waitFor(() => expect(container.querySelector(".status.offline")).toBeTruthy());
+    await waitFor(() => {
+      const titles = Array.from(container.querySelectorAll(".memo-title")).map((e) => e.textContent);
+      expect(titles).toContain("OpenTemp");
+      expect(titles).toContain("OtherTemp");
+    });
+    // open -71 so it's the current memo
+    const openLi = Array.from(container.querySelectorAll(".memo-list li")).find(
+      (el) => el.querySelector(".memo-title")?.textContent === "OpenTemp"
+    )!;
+    await act(async () => {
+      fireEvent.click(openLi);
+    });
+    await waitFor(() =>
+      expect((container.querySelector("textarea.editor") as HTMLTextAreaElement)?.value).toContain("open body")
+    );
+    // delete the OTHER temp (-72) → deleteMemo's `currentId === id` is FALSE (else arm),
+    // so the editor stays on -71
+    const otherLi = Array.from(container.querySelectorAll(".memo-list li")).find(
+      (el) => el.querySelector(".memo-title")?.textContent === "OtherTemp"
+    )!;
+    await act(async () => {
+      fireEvent.click(otherLi.querySelector(".del")!);
+    });
+    await waitFor(() => {
+      const titles = Array.from(container.querySelectorAll(".memo-title")).map((e) => e.textContent);
+      expect(titles).not.toContain("OtherTemp");
+    });
+    // editor still shows the open temp (currentId untouched)
+    expect((container.querySelector("textarea.editor") as HTMLTextAreaElement).value).toContain("open body");
+  });
+});
+
+describe("save with a blank value (false arm of !isBlank)", () => {
+  it("does not un-freshen a memo when the saved value is blank", async () => {
+    authedBoot();
+    const row = server.seed({ title: "Blanky", content: "# Blanky\n\nstart" });
+    location.hash = "#" + row.id;
+    const { container } = render(<App />);
+    await waitFor(() =>
+      expect((container.querySelector("textarea.editor") as HTMLTextAreaElement)?.value).toContain("start")
+    );
+    // type a BLANK value ("# " only) then Cmd+S → save() with isBlank(value) true →
+    // the `if (!isBlank(value))` guard takes its else arm (no freshIds.delete)
+    const ta = container.querySelector("textarea.editor") as HTMLTextAreaElement;
+    await act(async () => {
+      fireEvent.input(ta, { target: { value: "#   " } });
+    });
+    // separate act so the content state propagates before Cmd+S reads it
+    await act(async () => {
+      fireEvent.keyDown(window, { key: "s", metaKey: true });
+    });
+    await waitFor(() => expect(server.memos.find((m) => m.id === row.id)?.content).toBe("#   "));
+  });
+});
+
+describe("discardDeleted with a null current id (id == null else)", () => {
+  it("clears the deleted banner even when the open memo was already removed", async () => {
+    authedBoot();
+    const row = server.seed({ title: "Zd", content: "# Zd\n\nv1" });
+    location.hash = "#" + row.id;
+    const { container } = render(<App />);
+    await waitFor(() =>
+      expect((container.querySelector("textarea.editor") as HTMLTextAreaElement)?.value).toContain("v1")
+    );
+    // raise the deleted banner, then delete the open memo from the sidebar → currentId
+    // becomes null while the banner stays up
+    server.opts.putStatus = 404;
+    const ta = container.querySelector("textarea.editor") as HTMLTextAreaElement;
+    await act(async () => {
+      fireEvent.input(ta, { target: { value: "# Zd\n\nbye" } });
+    });
+    await waitFor(() => expect(container.querySelector(".conflict span")?.textContent).toContain("삭제"));
+    server.opts.putStatus = 0;
+    const target = container.querySelector(".memo-list li") as HTMLElement;
+    await act(async () => {
+      fireEvent.click(target.querySelector(".del")!);
+    });
+    await waitFor(() => expect(container.querySelector(".center")).toBeTruthy());
+    expect(container.querySelector(".conflict")).toBeTruthy();
+    // 버리기 → discardDeleted: id == null → the `if (id != null)` else arm; banner clears
+    await act(async () => {
+      fireEvent.click(container.querySelectorAll(".conflict button")[1]);
+    });
+    await waitFor(() => expect(container.querySelector(".conflict")).toBeFalsy());
+  });
+});
+
+describe("Cmd/Ctrl key handler false arms", () => {
+  it("Cmd+S with no pending timer still saves (timer.current else arm)", async () => {
+    authedBoot();
+    const row = server.seed({ title: "NoTimer", content: "# NoTimer\n\nv1" });
+    location.hash = "#" + row.id;
+    const { container } = render(<App />);
+    await waitFor(() =>
+      expect((container.querySelector("textarea.editor") as HTMLTextAreaElement)?.value).toContain("v1")
+    );
+    await waitFor(() => expect(kv.get(DRAFT + row.id)).toBeNull()); // settled, no timer
+    // Cmd+S with no debounce pending → `if (timer.current)` else arm, save still runs
+    await act(async () => {
+      fireEvent.keyDown(window, { key: "s", metaKey: true });
+    });
+    await new Promise((r) => setTimeout(r, 20));
+    expect(container.querySelector(".app")).toBeTruthy();
+  });
+
+  it("Cmd + an unrelated key is ignored (k === 'k' else)", async () => {
+    authedBoot();
+    const row = server.seed({ title: "OtherKey", content: "# OtherKey\n\nv1" });
+    location.hash = "#" + row.id;
+    const { container } = render(<App />);
+    await waitFor(() => expect(container.querySelector("textarea.editor")).toBeTruthy());
+    const before = server.memos.length;
+    // Cmd+P (not s, not k) → k === "s" false, k === "k" false (else of the else-if)
+    await act(async () => {
+      fireEvent.keyDown(window, { key: "p", metaKey: true });
+    });
+    await new Promise((r) => setTimeout(r, 10));
+    expect(server.memos.length).toBe(before); // no new memo, no crash
+  });
+});
+
+describe("beforeunload nothing-pending else arm", () => {
+  it("does not warn on unload when no save is pending for a non-fresh memo", async () => {
+    authedBoot();
+    const row = server.seed({ title: "Clean", content: "# Clean\n\nv1" });
+    location.hash = "#" + row.id;
+    const { container } = render(<App />);
+    await waitFor(() =>
+      expect((container.querySelector("textarea.editor") as HTMLTextAreaElement)?.value).toContain("v1")
+    );
+    // make sure the memo is non-fresh + has no pending save (open + settled, never edited)
+    await waitFor(() => expect(kv.get(DRAFT + row.id)).toBeNull());
+    const evt = new Event("beforeunload", { cancelable: true }) as BeforeUnloadEvent;
+    await act(async () => {
+      window.dispatchEvent(evt);
+    });
+    // nothing pending → the `timer||inFlight||pending` guard is false → no preventDefault
+    expect(evt.defaultPrevented).toBe(false);
+  });
+});
+
+describe("onDragOver without a Files payload (else arm)", () => {
+  it("does not preventDefault when the drag has no Files type", async () => {
+    authedBoot();
+    const row = server.seed({ title: "Dg", content: "# Dg\n\nbody" });
+    location.hash = "#" + row.id;
+    const { container } = render(<App />);
+    await waitFor(() =>
+      expect((container.querySelector("textarea.editor") as HTMLTextAreaElement)?.value).toContain("body")
+    );
+    const ta = container.querySelector("textarea.editor") as HTMLTextAreaElement;
+    // dragOver with types lacking "Files" → `types?.includes("Files")` false → no preventDefault.
+    // Use the testing-library helper so preact's synthetic onDragOver handler runs, and
+    // assert via a spy on preventDefault (defaultPrevented isn't reliably mirrored).
+    const dt = { types: ["text/plain"] } as unknown as DataTransfer;
+    let prevented = false;
+    await act(async () => {
+      fireEvent.dragOver(ta, {
+        dataTransfer: dt,
+        preventDefault: () => {
+          prevented = true;
+        },
+      });
+    });
+    expect(prevented).toBe(false);
+  });
+});

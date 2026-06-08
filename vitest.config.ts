@@ -17,6 +17,14 @@ export default defineConfig({
       // main.tsx is the render bootstrap (no logic); styles aren't code.
       exclude: ["src/main.tsx", "src/**/*.css"],
       reporter: ["text", "html"],
+      // CI gate: every metric must stay at/above 95%. `npm run test:coverage`
+      // (and CI) fail the build if any drops below.
+      thresholds: {
+        lines: 95,
+        statements: 95,
+        functions: 95,
+        branches: 95,
+      },
     },
   },
 });

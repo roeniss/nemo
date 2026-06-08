@@ -1,13 +1,21 @@
 name: Deploy
 
+# Deploy never runs on its own — it waits for the CI workflow to finish on main
+# and only proceeds if CI succeeded (so coverage/typecheck/tests gate every
+# deploy). Manual dispatch is still allowed for one-off redeploys.
 on:
-  push:
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
     branches: [main]
   workflow_dispatch:
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
+    # gate: only deploy when the triggering CI run passed (manual dispatch bypasses
+    # the gate intentionally, for emergency redeploys)
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
     steps:
       - uses: actions/checkout@v6
 
@@ -21,8 +29,8 @@ jobs:
       - name: Typecheck
         run: npm run typecheck
 
-      - name: Test
-        run: npm test
+      - name: Test (with coverage gate)
+        run: npm run test:coverage
 
       - name: Build & deploy to Cloudflare Workers
         run: npm run deploy

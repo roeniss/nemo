@@ -72,6 +72,11 @@ app.post("/api/logout", (c) => {
 // gate everything under /api except the public auth routes
 app.use("/api/*", (c, next) => {
   const p = c.req.path;
+  // /api/login and /api/logout are registered before this middleware, so their
+  // handlers respond first and the gate never actually runs for them — this guard
+  // is a defensive net for any future reordering, hence unreachable under the
+  // current routes and excluded from coverage.
+  /* v8 ignore next */
   if (p === "/api/login" || p === "/api/logout") return next();
   return jwt({ secret: c.env.JWT_SECRET, cookie: COOKIE, alg: "HS256" })(c, next);
 });

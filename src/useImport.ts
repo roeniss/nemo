@@ -4,10 +4,13 @@ import { kv } from "./idb";
 // text file extensions — used alongside the MIME type and a NUL-byte sniff to keep binaries out
 const TEXT_EXT =
   /\.(txt|text|md|markdown|mdown|csv|tsv|json|jsonc|log|ya?ml|toml|ini|conf|env|xml|html?|css|scss|js|mjs|cjs|jsx|ts|tsx|py|rb|go|rs|c|h|cc|cpp|hpp|java|kt|swift|php|sh|bash|zsh|sql|svg|diff|patch|gitignore)$/i;
+const IMAGE_MAX_BYTES = 1024 * 1024; // 1 MB — paste a larger image and we reject it (base64 bloats it ~33%)
 
 type ImportDeps = {
   content: string;
   currentIdRef: { current: number | null };
+  editorRef: { current: HTMLTextAreaElement | null };
+  onEdit: (value: string) => void;
   flash: (msg: string) => void;
   setMemos: (updater: (m: MemoMeta[]) => MemoMeta[]) => void;
 };
@@ -24,9 +27,10 @@ function looksImportable(file: File, text: string): boolean {
   return looksText && !text.includes("\u0000");
 }
 
-// File import (picker + drag-drop) and folder upload both register each file as
-// its own memo (filename → "# name" title heading), plus .md export.
-export function useImport({ content, currentIdRef, flash, setMemos }: ImportDeps) {
+// File import (picker + drag-drop) and folder upload register each file as its
+// own memo (filename → "# name" title heading); cmd+v embeds a pasted image
+// inline as base64; plus .md export.
+export function useImport({ content, currentIdRef, editorRef, onEdit, flash, setMemos }: ImportDeps) {
   // turn one text file into a new memo on the server; returns its meta, or null
   // if the file is a binary / unreadable / the request failed (caller tallies it)
   async function createMemo(file: File): Promise<MemoMeta | null> {
@@ -90,6 +94,60 @@ export function useImport({ content, currentIdRef, flash, setMemos }: ImportDeps
     return importFiles(direct, "폴더가 비어 있어요.");
   }
 
+  // pull the first image out of a clipboard payload — covers both files
+  // (Finder-copied images, most screenshot pastes) and the items fallback
+  function firstImage(data: DataTransfer): File | null {
+    for (const f of Array.from(data.files)) if (f.type.startsWith("image/")) return f;
+    for (const it of Array.from(data.items)) {
+      if (it.kind === "file" && it.type.startsWith("image/")) {
+        const f = it.getAsFile();
+        if (f) return f;
+      }
+    }
+    return null;
+  }
+
+  // insert a snippet at the editor caret, routed through onEdit so it autosaves
+  // exactly like typing; restore the caret just after the inserted text. Reads
+  // the live textarea value (source of truth) so a stale closure can't clobber edits.
+  function insertAtCursor(snippet: string) {
+    const el = editorRef.current;
+    const base = el ? el.value : content;
+    const start = el ? el.selectionStart : base.length;
+    const end = el ? el.selectionEnd : base.length;
+    const next = base.slice(0, start) + snippet + base.slice(end);
+    const caret = start + snippet.length;
+    onEdit(next);
+    requestAnimationFrame(() => {
+      const e2 = editorRef.current;
+      if (e2) {
+        e2.focus();
+        e2.setSelectionRange(caret, caret);
+      }
+    });
+  }
+
+  // cmd+v of an image: size-check, then base64-encode and embed it at the caret
+  // as a markdown image (![name](data:...)). Returns true when it handled the
+  // paste (so the caller can preventDefault); false lets normal text paste run.
+  function pasteImage(data: DataTransfer | null | undefined): boolean {
+    if (!data) return false;
+    const file = firstImage(data);
+    if (!file) return false; // not an image paste — leave it to the browser
+    if (file.size > IMAGE_MAX_BYTES) {
+      flash(`이미지가 너무 커요 (${Math.round(file.size / 1024)} KB) — 1MB 이하만 첨부할 수 있어요.`);
+      return true;
+    }
+    const reader = new FileReader();
+    reader.onload = () => {
+      insertAtCursor(`![${file.name || "image"}](${reader.result as string})`);
+      flash(`이미지를 첨부했어요 (${Math.round(file.size / 1024)} KB).`);
+    };
+    reader.onerror = () => flash("이미지를 읽지 못했어요.");
+    reader.readAsDataURL(file);
+    return true;
+  }
+
   // download the current memo as a .md file (named after its title)
   function downloadMemo() {
     if (currentIdRef.current == null) return;
@@ -105,5 +163,5 @@ export function useImport({ content, currentIdRef, flash, setMemos }: ImportDeps
     URL.revokeObjectURL(url);
   }
 
-  return { importFile, importFolder, downloadMemo };
+  return { importFile, importFolder, pasteImage, downloadMemo };
 }

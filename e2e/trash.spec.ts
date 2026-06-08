@@ -66,6 +66,35 @@ test.describe("trash", () => {
     }
   });
 
+  test("the read-only trash view folds inline base64 like the editor", async ({ page, request }) => {
+    const title = uniq("TrashImg");
+    const big = "A".repeat(2000);
+    const uri = `data:image/png;base64,${big}`;
+    const id = await seedMemo(request, `# ${title}\n\n![shot](${uri})`);
+    try {
+      await page.goto("/");
+      await page.reload();
+      const row = page.locator(`${sel.list}:has(.memo-title:text-is("${title}"))`);
+      await expect(row).toBeVisible();
+      await row.locator(".del").click();
+      await expect(row).toHaveCount(0);
+
+      // open it from the Trash view
+      await page.click(trashTab);
+      await page.locator(`${sel.list}:has(.memo-title:text-is("${title}"))`).click();
+
+      // the read-only editor shows the fold marker, not the 2KB base64 wall…
+      const editor = page.locator("textarea.editor");
+      await expect(editor).toHaveAttribute("readonly", "");
+      await expect(editor).toHaveValue(/fold:0/);
+      expect(await editor.inputValue()).not.toContain(big);
+      // …while the preview still renders the real image
+      await expect(page.locator(".preview.markdown img")).toHaveAttribute("src", uri);
+    } finally {
+      await purge(request, id);
+    }
+  });
+
   test("hide permanently removes a memo from the Trash view", async ({ page, request }) => {
     const title = uniq("TrashH");
     const id = await seedMemo(request, `# ${title}\n\nbody`);

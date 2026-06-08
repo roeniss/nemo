@@ -761,6 +761,12 @@ export default function App() {
   const { html, tooBig: previewTooBig, size: previewSize } = usePreview(
     viewing ? viewing.content : content
   );
+  // read-only trash view reuses the editor pane; fold its inline base64 the same
+  // way the editable view does (no foldMap needed — it never expands back to save)
+  const viewingDisplay = useMemo(
+    () => (viewing ? foldDataUris(viewing.content).display : ""),
+    [viewing]
+  );
   const visibleMemos = useMemo(() => {
     const q = query.trim().toLowerCase();
     return q ? memos.filter((m) => m.title.toLowerCase().includes(q)) : memos;
@@ -991,54 +997,54 @@ export default function App() {
           </div>
         )}
 
-        {viewing ? (
-          <div className="pane">
-            <textarea
-              className="editor"
-              value={viewing.content}
-              readOnly
-              spellcheck={false}
-            />
-            {previewTooBig ? (
-              <div className="preview markdown preview-skipped">
-                미리보기 생략 — 문서가 너무 커요 ({Math.round(previewSize / 1024)} KB).
-              </div>
-            ) : (
-              <div className="preview markdown" dangerouslySetInnerHTML={{ __html: html }} />
-            )}
-          </div>
-        ) : currentId == null ? (
+        {viewing == null && currentId == null ? (
           <div className="center">
             {loading ? "Loading…" : "Select a memo on the left, or create a new one."}
           </div>
         ) : (
+          // one pane for both modes: an editable memo, or a read-only trash memo
+          // (same folding + preview; editing handlers are off while read-only)
           <div className="pane">
             <textarea
               ref={editorRef}
               className="editor"
-              value={editorValue}
-              onChange={(e) => onEdit(e.currentTarget.value)}
-              onPaste={(e) => {
-                // a pasted image is embedded inline as base64; everything else
-                // falls through to the normal text paste
-                if (pasteImage(e.clipboardData)) e.preventDefault();
-              }}
-              onDragOver={(e) => {
-                if (e.dataTransfer?.types?.includes("Files")) e.preventDefault(); // allow drop
-              }}
-              onDrop={(e) => {
-                const files = e.dataTransfer?.files;
-                if (files && files.length) {
-                  e.preventDefault(); // don't let the browser navigate to the file
-                  importFile(files); // each dropped file → its own new memo
-                }
-              }}
+              value={viewing ? viewingDisplay : editorValue}
+              readOnly={viewing != null}
+              onChange={viewing ? undefined : (e) => onEdit(e.currentTarget.value)}
+              onPaste={
+                viewing
+                  ? undefined
+                  : (e) => {
+                      // a pasted image is embedded inline as base64; everything
+                      // else falls through to the normal text paste
+                      if (pasteImage(e.clipboardData)) e.preventDefault();
+                    }
+              }
+              onDragOver={
+                viewing
+                  ? undefined
+                  : (e) => {
+                      if (e.dataTransfer?.types?.includes("Files")) e.preventDefault(); // allow drop
+                    }
+              }
+              onDrop={
+                viewing
+                  ? undefined
+                  : (e) => {
+                      const files = e.dataTransfer?.files;
+                      if (files && files.length) {
+                        e.preventDefault(); // don't let the browser navigate to the file
+                        importFile(files); // each dropped file → its own new memo
+                      }
+                    }
+              }
               placeholder="# Title&#10;&#10;Write in markdown…  (drop a file for a new memo · paste an image to embed)"
               spellcheck={false}
             />
             {previewTooBig ? (
               <div className="preview markdown preview-skipped">
-                미리보기 생략 — 문서가 너무 커요 ({Math.round(previewSize / 1024)} KB). 편집은 정상 저장됩니다.
+                미리보기 생략 — 문서가 너무 커요 ({Math.round(previewSize / 1024)} KB).
+                {viewing ? "" : " 편집은 정상 저장됩니다."}
               </div>
             ) : (
               <div className="preview markdown" dangerouslySetInnerHTML={{ __html: html }} />

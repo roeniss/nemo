@@ -666,20 +666,28 @@ export default function App() {
     return () => window.removeEventListener("keydown", onKey);
   }, [currentId, content]);
 
-  // flush pending save on tab close / reload (keepalive survives unload)
+  // flush pending save on tab close / reload (keepalive survives unload), and
+  // warn the user (⌘W / reload) while a server save is still in flight so the
+  // last edits aren't silently dropped if the keepalive request never lands
   useEffect(() => {
-    function onUnload() {
+    function onUnload(e: BeforeUnloadEvent) {
       const id = currentIdRef.current;
       if (id == null || id < 0) return; // temp memos already live in localStorage
       if (freshIds.current.has(id) && isBlank(contentRef.current)) {
         fetch(`/api/memos/${id}?purge=1`, { method: "DELETE", keepalive: true });
-      } else if (timer.current) {
+        return;
+      }
+      // a debounced edit hasn't fired yet, or a save is mid-flight / queued —
+      // best-effort push it now and prompt before leaving
+      if (timer.current != null || inFlight.current || pendingSave.current != null) {
         fetch(`/api/memos/${id}`, {
           method: "PUT",
           headers: { "content-type": "application/json" },
           body: JSON.stringify({ content: contentRef.current }),
           keepalive: true,
         });
+        e.preventDefault();
+        e.returnValue = ""; // triggers the browser's native "Leave site?" confirm
       }
     }
     window.addEventListener("beforeunload", onUnload);

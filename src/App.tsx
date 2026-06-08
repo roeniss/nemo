@@ -93,9 +93,9 @@ export default function App() {
   const fileRef = useRef<HTMLInputElement>(null); // hidden file picker for text import
   const folderRef = useRef<HTMLInputElement>(null); // hidden folder picker (each file → a memo)
   const { notice, flash } = useToast();
-  // file/folder import (each file → its own memo) and .md export
-  const { importFile, importFolder, downloadMemo } =
-    useImport({ content, currentIdRef, flash, setMemos });
+  // file/folder import (each file → its own memo), image paste (base64 embed), and .md export
+  const { importFile, importFolder, pasteImage, downloadMemo } =
+    useImport({ content, currentIdRef, editorRef, onEdit, flash, setMemos });
   // always-latest openMemo, so the hashchange listener (registered once) never
   // calls a stale closure
   const openMemoRef = useRef<(id: number) => void>(() => {});
@@ -428,11 +428,17 @@ export default function App() {
     setEditorValue(display);
   }
 
+  // editor changed (a keystroke, or an image pasted at the caret): `value` is the
+  // folded editor view. Mirror it to editorValue, then expand the fold markers
+  // back to full bytes so content/draft/preview/save never persist a marker. New
+  // base64 (e.g. a fresh paste) carries no marker and passes through untouched.
   function onEdit(value: string) {
-    setContent(value);
+    setEditorValue(value);
+    const full = expandDataUris(value, foldMap.current);
+    setContent(full);
     if (currentId == null) return;
     // local-first: persist to localStorage immediately, before any network call
-    kv.set(DRAFT + currentId, value);
+    kv.set(DRAFT + currentId, full);
     if (conflictRef.current || deletedRef.current) return; // resolve banner first; don't autosave
     if (timer.current) clearTimeout(timer.current);
     setSaving(true);
@@ -442,7 +448,7 @@ export default function App() {
     const delay = Math.max(0, Math.min(SAVE_DEBOUNCE, SAVE_MAX_WAIT - since));
     timer.current = setTimeout(() => {
       timer.current = null; // debounce fired — no edit pending (keeps the guard honest)
-      save(currentId, value);
+      save(currentId, full);
     }, delay);
   }
 
@@ -952,10 +958,11 @@ export default function App() {
               ref={editorRef}
               className="editor"
               value={editorValue}
-              onChange={(e) => {
-                const display = e.currentTarget.value;
-                setEditorValue(display); // keep the folded view in sync with the keystroke
-                onEdit(expandDataUris(display, foldMap.current)); // save/preview the full bytes
+              onChange={(e) => onEdit(e.currentTarget.value)}
+              onPaste={(e) => {
+                // a pasted image is embedded inline as base64; everything else
+                // falls through to the normal text paste
+                if (pasteImage(e.clipboardData)) e.preventDefault();
               }}
               onDragOver={(e) => {
                 if (e.dataTransfer?.types?.includes("Files")) e.preventDefault(); // allow drop
@@ -967,7 +974,7 @@ export default function App() {
                   importFile(files); // each dropped file → its own new memo
                 }
               }}
-              placeholder="# Title&#10;&#10;Write in markdown…  (or drop a file to make a new memo)"
+              placeholder="# Title&#10;&#10;Write in markdown…  (drop a file for a new memo · paste an image to embed)"
               spellcheck={false}
             />
             {previewTooBig ? (

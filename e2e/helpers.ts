@@ -59,4 +59,5 @@ export const sel = {
   list: ".memo-list li",
   activeTitle: ".memo-list li.active .memo-title",
   toast: ".toast",
+  themeToggle: ".topbar .theme-toggle",
 };

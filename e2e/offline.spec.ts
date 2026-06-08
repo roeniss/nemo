@@ -1,5 +1,5 @@
 import { test, expect } from "./fixtures";
-import { sel, purge, uniq } from "./helpers";
+import { sel, purge, uniq, seedMemo } from "./helpers";
 
 // drop every /api/* call to simulate being offline
 async function goOffline(page: import("@playwright/test").Page) {
@@ -44,6 +44,29 @@ test.describe("offline", () => {
       expect(((await r.json()) as { content: string }).content).toContain("written while offline");
     } finally {
       if (realId) await purge(request, realId);
+    }
+  });
+
+  test("reopens a previously-viewed memo from cache while offline", async ({ page, request }) => {
+    const title = uniq("OfflineRead");
+    const body = `# ${title}\n\ncached body text`;
+    const id = await seedMemo(request, body);
+    try {
+      // visit online once so the list (localStorage) and content (IndexedDB) are cached
+      await page.goto(`/#${id}`);
+      await expect(page.locator(sel.editor)).toHaveValue(body);
+
+      // cut the network, then reload: the boot fetch fails and the app falls back
+      // to the cached list + cached content for the hashed memo
+      await goOffline(page);
+      await page.reload();
+
+      await expect(page.locator(".status.offline")).toBeVisible();
+      await expect(page).toHaveURL(new RegExp(`#${id}$`));
+      await expect(page.locator(sel.editor)).toHaveValue(body); // served from cache, no network
+    } finally {
+      await goOnline(page);
+      await purge(request, id);
     }
   });
 });

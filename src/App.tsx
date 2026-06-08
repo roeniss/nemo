@@ -72,11 +72,20 @@ export default function App() {
   const foldMap = useRef<string[]>([]); // index → full base64 payload for the folds now shown
 
   const [sidebar, setSidebar] = useState(() => window.innerWidth > 640); // closed by default on mobile
-  // theme: the boot script in index.html already set data-theme before paint;
-  // read it back so the toggle reflects the actual state
-  const [theme, setTheme] = useState<"light" | "dark">(
-    () => (document.documentElement.dataset.theme === "dark" ? "dark" : "light")
+  // theme preference: "light" | "dark" follow the explicit choice, "system"
+  // tracks the OS. Stored in qm-theme; the boot script in index.html already
+  // resolved it to data-theme before paint.
+  const [themePref, setThemePref] = useState<"light" | "dark" | "system">(
+    () => {
+      const saved = localStorage.getItem("qm-theme");
+      return saved === "light" || saved === "dark" ? saved : "system";
+    }
   );
+  const [systemDark, setSystemDark] = useState(
+    () => matchMedia("(prefers-color-scheme: dark)").matches
+  );
+  const theme: "light" | "dark" =
+    themePref === "system" ? (systemDark ? "dark" : "light") : themePref;
   const [saving, setSaving] = useState(false);
   const [offline, setOffline] = useState(false);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -733,14 +742,26 @@ export default function App() {
     return () => window.removeEventListener("beforeunload", onUnload);
   }, []);
 
-  // apply + persist the theme; keep the browser chrome (theme-color) in sync
+  // apply the resolved theme; keep the browser chrome (theme-color) in sync
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
-    localStorage.setItem("qm-theme", theme);
     document
       .querySelector('meta[name="theme-color"]')
       ?.setAttribute("content", theme === "dark" ? "#1a1a1a" : "#ffffff");
   }, [theme]);
+
+  // persist the preference (the resolved theme is derived from it)
+  useEffect(() => {
+    localStorage.setItem("qm-theme", themePref);
+  }, [themePref]);
+
+  // when following the system, react to OS theme changes live
+  useEffect(() => {
+    const mq = matchMedia("(prefers-color-scheme: dark)");
+    const onChange = (e: MediaQueryListEvent) => setSystemDark(e.matches);
+    mq.addEventListener("change", onChange);
+    return () => mq.removeEventListener("change", onChange);
+  }, []);
 
   // recover the moment the browser reports the network is back
   useEffect(() => {
@@ -912,10 +933,20 @@ export default function App() {
           <div className="topbar-actions">
             <button
               className="ghost theme-toggle"
-              onClick={() => setTheme((t) => (t === "dark" ? "light" : "dark"))}
-              title={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
+              onClick={() =>
+                setThemePref((p) =>
+                  p === "light" ? "dark" : p === "dark" ? "system" : "light"
+                )
+              }
+              title={
+                themePref === "light"
+                  ? "Light mode (click for dark)"
+                  : themePref === "dark"
+                    ? "Dark mode (click to follow system)"
+                    : "Following system (click for light)"
+              }
             >
-              {theme === "dark" ? "☀️" : "🌙"}
+              {themePref === "light" ? "☀️" : themePref === "dark" ? "🌙" : "🖥️"}
             </button>
             <button
               className="download"

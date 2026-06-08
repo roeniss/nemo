@@ -11,15 +11,16 @@
     <link rel="apple-touch-icon" href="/icon-192.png" />
     <title>nemo</title>
     <script>
-      // set the theme before first paint (no flash): a stored choice wins,
-      // otherwise follow the OS preference
+      // set the theme before first paint (no flash). qm-theme stores the
+      // preference ("light" | "dark" | "system"); "system" (or none) follows OS
       (function () {
         try {
           var saved = localStorage.getItem("qm-theme");
           var dark =
             saved === "dark" ||
-            (!saved && matchMedia("(prefers-color-scheme: dark)").matches);
-          if (dark) document.documentElement.dataset.theme = "dark";
+            (saved !== "light" &&
+              matchMedia("(prefers-color-scheme: dark)").matches);
+          document.documentElement.dataset.theme = dark ? "dark" : "light";
         } catch (e) {}
       })();
     </script>

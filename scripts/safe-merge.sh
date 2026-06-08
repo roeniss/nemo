@@ -24,7 +24,23 @@ if [ -z "$PR_NUM" ]; then
   exit 1
 fi
 
-echo "⏳ Waiting for CI checks on PR #$PR_NUM to finish…"
+# Checks don't register the instant a PR opens; gh then prints "no checks
+# reported" and exits non-zero. Poll briefly until at least one check appears.
+echo "⏳ Waiting for CI checks on PR #$PR_NUM to register…"
+i=0
+while [ "$i" -lt 24 ]; do
+  out=$(gh pr checks "$PR_NUM" 2>&1) && break
+  case "$out" in
+    *"no checks reported"*) i=$((i + 1)); sleep 5 ;;  # not registered yet — keep waiting
+    *) break ;;                                       # checks exist (some pending/failing) — proceed to --watch
+  esac
+done
+if [ "$i" -ge 24 ]; then
+  echo "✋ No CI checks appeared after 2 min — refusing to merge PR #$PR_NUM." >&2
+  exit 1
+fi
+
+echo "⏳ Watching CI checks on PR #$PR_NUM…"
 # --watch blocks until all checks complete; --fail-fast bails on the first failure.
 # Exits non-zero if any check fails, so `set -e` aborts the merge below.
 if ! gh pr checks "$PR_NUM" --watch --fail-fast; then

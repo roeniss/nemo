@@ -263,6 +263,7 @@ export default function App() {
   }
 
   async function openMemo(id: number) {
+    if (id === currentIdRef.current) return; // already open — re-clicking it is a no-op (and would purge a fresh-blank current memo via leaveCurrent)
     await leaveCurrent();
     setViewing(null); // leaving any read-only trash view
     conflictRef.current = false;
@@ -377,6 +378,28 @@ export default function App() {
     if (id < 0) {
       // unsynced temp — drop locally, nothing to trash/undo
       writeList(TEMPS_KEY, readList(TEMPS_KEY).filter((t) => t.id !== id));
+      kv.remove(DRAFT + id);
+      setMemos((ms) => ms.filter((x) => x.id !== id));
+      if (currentId === id) {
+        setCurrentId(null);
+        setContent("");
+      }
+      return;
+    }
+    // a never-used empty memo (created this session, never given content) — purge
+    // it outright instead of sending an "Untitled" placeholder to the trash
+    if (freshIds.current.has(id)) {
+      freshIds.current.delete(id);
+      if (currentId === id && timer.current) {
+        clearTimeout(timer.current); // cancel any pending save that would resurrect it
+        timer.current = null;
+      }
+      try {
+        await api(`/memos/${id}?purge=1`, { method: "DELETE" });
+      } catch {
+        setOffline(true);
+      }
+      kv.remove(CONTENT_CACHE + id);
       kv.remove(DRAFT + id);
       setMemos((ms) => ms.filter((x) => x.id !== id));
       if (currentId === id) {

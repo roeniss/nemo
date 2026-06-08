@@ -4,6 +4,11 @@ import { sel, purge, blankMemo } from "./helpers";
 const hashId = (page: import("@playwright/test").Page) =>
   page.evaluate(() => Number(location.hash.replace("#", "")));
 
+// the shared local D1 carries many leftover "Untitled" rows, so target the
+// current memo by the .active row rather than by title
+const activeRow = (page: import("@playwright/test").Page) =>
+  page.locator(`${sel.list}.active`);
+
 test.describe("empty-memo cleanup", () => {
   test("an untouched new memo is purged when you leave it", async ({ page, request }) => {
     await blankMemo(page);
@@ -54,6 +59,54 @@ test.describe("empty-memo cleanup", () => {
     } finally {
       await purge(request, id);
       await purge(request, await hashId(page));
+    }
+  });
+
+  // bug: clicking the open "Untitled" row in the sidebar used to purge it via
+  // leaveCurrent() and then re-open the now-deleted memo, so it vanished
+  test("clicking the open Untitled memo in the sidebar keeps it", async ({ page, request }) => {
+    await blankMemo(page);
+    const id = await hashId(page);
+    try {
+      await activeRow(page).locator(".memo-title").click();
+
+      // still the current memo, still in the list, still on the server
+      await expect(page).toHaveURL(new RegExp(`#${id}$`));
+      await expect(activeRow(page)).toHaveCount(1);
+      await expect(page.locator(sel.editor)).toHaveValue("# ");
+      expect((await request.get(`/api/memos/${id}`)).ok()).toBeTruthy();
+    } finally {
+      await purge(request, id);
+    }
+  });
+
+  // bug: deleting an unchanged Untitled memo should hard-purge it, not send an
+  // empty placeholder to the Trash
+  test("deleting an unchanged Untitled memo purges it instead of trashing it", async ({
+    page,
+    request,
+  }) => {
+    await blankMemo(page);
+    const id = await hashId(page);
+    let purged = false;
+    try {
+      await activeRow(page).locator(".del").click();
+      await expect(page).not.toHaveURL(new RegExp(`#${id}$`));
+
+      // gone from trash too (a soft-delete would leave /api/trash/:id readable);
+      // poll since the purge DELETE is fire-and-forget from the click handler
+      await expect
+        .poll(async () => (await request.get(`/api/trash/${id}`)).status())
+        .toBe(404);
+      await expect
+        .poll(async () => (await request.get(`/api/memos/${id}`)).status())
+        .toBe(404);
+      purged = true;
+
+      // no Undo toast for an unchanged memo
+      await expect(page.locator(sel.toast)).toHaveCount(0);
+    } finally {
+      if (!purged) await purge(request, id);
     }
   });
 });

@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { marked } from "marked";
 import DOMPurify from "dompurify";
-import { PREVIEW_DEBOUNCE, PREVIEW_MAX } from "./lib";
+import { PREVIEW_DEBOUNCE } from "./lib";
 
 marked.setOptions({ gfm: true, breaks: true });
 
@@ -17,19 +17,14 @@ export function useToast() {
   return { notice, flash };
 }
 
-// live markdown preview, debounced so marked+DOMPurify don't run on every keystroke,
-// and skipped entirely for very large documents (rendering a 600KB+ blob per edit janks
-// typing). Returns sanitized html plus a too-big flag for the placeholder.
+// live markdown preview, debounced so marked+DOMPurify don't run on every keystroke.
+// Returns sanitized html.
 export function usePreview(content: string) {
   const [src, setSrc] = useState(content);
   useEffect(() => {
     const t = setTimeout(() => setSrc(content), PREVIEW_DEBOUNCE);
     return () => clearTimeout(t);
   }, [content]);
-  const tooBig = src.length > PREVIEW_MAX;
-  const html = useMemo(
-    () => (tooBig ? "" : DOMPurify.sanitize(marked.parse(src) as string)),
-    [src, tooBig]
-  );
-  return { html, tooBig, size: src.length };
+  const html = useMemo(() => DOMPurify.sanitize(marked.parse(src) as string), [src]);
+  return { html };
 }

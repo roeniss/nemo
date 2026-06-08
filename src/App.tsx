@@ -753,12 +753,9 @@ export default function App() {
     return () => clearInterval(iv);
   }, [offline]);
 
-  // debounced, size-capped live markdown preview
-  // the preview renders the editor content, or the read-only trash memo when one
-  // is open (the editor is hidden in that case, so there's no contention)
-  const { html, tooBig: previewTooBig, size: previewSize } = usePreview(
-    viewing ? viewing.content : content
-  );
+  // debounced live markdown preview — renders the editor content, or the read-only
+  // trash memo when one is open (the editor is hidden in that case)
+  const { html } = usePreview(viewing ? viewing.content : content);
   const visibleMemos = useMemo(() => {
     const q = query.trim().toLowerCase();
     return q ? memos.filter((m) => m.title.toLowerCase().includes(q)) : memos;
@@ -1007,13 +1004,7 @@ export default function App() {
               readOnly
               spellcheck={false}
             />
-            {previewTooBig ? (
-              <div className="preview markdown preview-skipped">
-                미리보기 생략 — 문서가 너무 커요 ({Math.round(previewSize / 1024)} KB).
-              </div>
-            ) : (
-              <div className="preview markdown" dangerouslySetInnerHTML={{ __html: html }} />
-            )}
+            <div className="preview markdown" dangerouslySetInnerHTML={{ __html: html }} />
           </div>
         ) : currentId == null ? (
           <div className="center">
@@ -1044,13 +1035,7 @@ export default function App() {
               placeholder="# Title&#10;&#10;Write in markdown…  (drop a file for a new memo · paste an image to embed)"
               spellcheck={false}
             />
-            {previewTooBig ? (
-              <div className="preview markdown preview-skipped">
-                미리보기 생략 — 문서가 너무 커요 ({Math.round(previewSize / 1024)} KB). 편집은 정상 저장됩니다.
-              </div>
-            ) : (
-              <div className="preview markdown" dangerouslySetInnerHTML={{ __html: html }} />
-            )}
+            <div className="preview markdown" dangerouslySetInnerHTML={{ __html: html }} />
           </div>
         )}
       </div>

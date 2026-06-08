@@ -23,6 +23,14 @@ jobs:
 
       - run: npm ci
 
+      # apply the schema to the remote D1 before shipping code that depends on it.
+      # every statement is IF NOT EXISTS, so this is idempotent and safe per deploy.
+      - name: Apply D1 schema (remote)
+        run: npm run db:remote
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+
       - name: Build & deploy to Cloudflare Workers
         run: npm run deploy
         env:

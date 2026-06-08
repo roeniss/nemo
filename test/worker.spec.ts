@@ -12,6 +12,13 @@ CREATE TABLE memos (
   deleted_at INTEGER,
   hidden_at INTEGER
 );
+CREATE TABLE memo_versions (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  memo_id INTEGER NOT NULL,
+  title TEXT NOT NULL,
+  content TEXT NOT NULL,
+  created_at INTEGER NOT NULL
+);
 `;
 
 let env: Record<string, unknown>;
@@ -130,6 +137,105 @@ describe("memos", () => {
     expect(await (await req("/api/trash", { headers: h })).json()).toHaveLength(0);
     const row = await env.DB!.prepare("SELECT id FROM memos WHERE id = ?").bind(c.id).first();
     expect(row).toBeNull();
+  });
+});
+
+describe("history (session snapshots)", () => {
+  const HOUR = 60 * 60 * 1000;
+  const create = async (h: HeadersInit) =>
+    (await req("/api/memos", { method: "POST", headers: h })).json();
+  const put = async (id: number, h: HeadersInit, body: unknown) =>
+    (await req(`/api/memos/${id}`, { method: "PUT", headers: h, body: JSON.stringify(body) })).json();
+  // rewrite a memo's stored state so the time-gated snapshot logic is testable
+  // (title is kept in sync with content, mirroring what a real PUT would store)
+  const backdate = (id: number, created_at: number, updated_at: number, content: string) => {
+    const title = content.split("\n")[0].replace(/^#+\s*/, "") || "Untitled";
+    return env
+      .DB!.prepare(
+        "UPDATE memos SET created_at = ?, updated_at = ?, content = ?, title = ? WHERE id = ?"
+      )
+      .bind(created_at, updated_at, content, title, id)
+      .run();
+  };
+  const versions = async (id: number) =>
+    (
+      await env.DB!.prepare(
+        "SELECT * FROM memo_versions WHERE memo_id = ? ORDER BY created_at DESC"
+      )
+        .bind(id)
+        .all()
+    ).results as Array<{ title: string; content: string; created_at: number }>;
+
+  it("snapshots the prior session's final state when editing resumes after a >=1h idle gap", async () => {
+    const h = await authedHeaders();
+    const c = await create(h);
+    const old = Date.now() - 2 * HOUR;
+    await backdate(c.id, old, old, "# Old\nbody");
+    await put(c.id, h, { content: "# New", base: old });
+    const v = await versions(c.id);
+    expect(v).toHaveLength(1);
+    expect(v[0].title).toBe("Old");
+    expect(v[0].content).toBe("# Old\nbody");
+    expect(v[0].created_at).toBe(old); // snapshot stamped with the session's end time
+  });
+
+  it("does not snapshot rapid edits within a single session", async () => {
+    const h = await authedHeaders();
+    const c = await create(h);
+    const u1 = await put(c.id, h, { content: "# a", base: c.updated_at }); // prev empty → skip
+    await put(c.id, h, { content: "# b", base: u1.updated_at }); // tiny gap → skip
+    expect(await versions(c.id)).toHaveLength(0);
+  });
+
+  it("caps a long continuous run at 1h even without an idle gap", async () => {
+    const h = await authedHeaders();
+    const c = await create(h);
+    const now = Date.now();
+    // last save was seconds ago (no idle gap) but the run began >1h ago, unsnapshotted
+    await backdate(c.id, now - 2 * HOUR, now - 1000, "# Long");
+    await put(c.id, h, { content: "# Long edited", base: now - 1000 });
+    const v = await versions(c.id);
+    expect(v).toHaveLength(1);
+    expect(v[0].content).toBe("# Long");
+  });
+
+  it("skips an unchanged save even after a gap", async () => {
+    const h = await authedHeaders();
+    const c = await create(h);
+    const old = Date.now() - 2 * HOUR;
+    await backdate(c.id, old, old, "# Same");
+    await put(c.id, h, { content: "# Same", base: old });
+    expect(await versions(c.id)).toHaveLength(0);
+  });
+
+  it("skips empty initial content even after a gap", async () => {
+    const h = await authedHeaders();
+    const c = await create(h);
+    const old = Date.now() - 2 * HOUR;
+    await backdate(c.id, old, old, "");
+    await put(c.id, h, { content: "# First", base: old });
+    expect(await versions(c.id)).toHaveLength(0);
+  });
+
+  it("lists versions (no content) and serves a single version's content; purge clears them", async () => {
+    const h = await authedHeaders();
+    const c = await create(h);
+    const old = Date.now() - 2 * HOUR;
+    await backdate(c.id, old, old, "# Old");
+    await put(c.id, h, { content: "# New", base: old });
+
+    const listed = await (await req(`/api/memos/${c.id}/versions`, { headers: h })).json();
+    expect(listed).toHaveLength(1);
+    expect(listed[0].title).toBe("Old");
+    expect(listed[0].content).toBeUndefined(); // list stays light
+
+    const one = await (
+      await req(`/api/memos/${c.id}/versions/${listed[0].id}`, { headers: h })
+    ).json();
+    expect(one.content).toBe("# Old");
+
+    await req(`/api/memos/${c.id}?purge=1`, { method: "DELETE", headers: h });
+    expect(await (await req(`/api/memos/${c.id}/versions`, { headers: h })).json()).toHaveLength(0);
   });
 });
 

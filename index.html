@@ -10,6 +10,19 @@
     <link rel="manifest" href="/manifest.webmanifest" />
     <link rel="apple-touch-icon" href="/icon-192.png" />
     <title>nemo</title>
+    <script>
+      // set the theme before first paint (no flash): a stored choice wins,
+      // otherwise follow the OS preference
+      (function () {
+        try {
+          var saved = localStorage.getItem("qm-theme");
+          var dark =
+            saved === "dark" ||
+            (!saved && matchMedia("(prefers-color-scheme: dark)").matches);
+          if (dark) document.documentElement.dataset.theme = "dark";
+        } catch (e) {}
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>

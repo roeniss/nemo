@@ -1,3 +1,40 @@
+:root {
+  --bg: #fff;
+  --fg: #1a1a1a;
+  --fg-muted: #888;
+  --fg-faint: #bbb;
+  --border: #e5e5e5;
+  --border-strong: #d0d0d0;
+  --surface: #fafafa;
+  --surface-2: #ececec;
+  --btn-bg: #f7f7f7;
+  --input-bg: #fff;
+  --accent: #1a1a1a;
+  --accent-fg: #fff;
+  --danger: #c0392b;
+  --code-bg: #f4f4f4;
+  --warn-bg: #fff3cd;
+  --warn-border: #ffe69c;
+}
+:root[data-theme="dark"] {
+  --bg: #1a1a1a;
+  --fg: #e8e8e8;
+  --fg-muted: #9a9a9a;
+  --fg-faint: #6a6a6a;
+  --border: #333;
+  --border-strong: #444;
+  --surface: #222;
+  --surface-2: #2f2f2f;
+  --btn-bg: #2a2a2a;
+  --input-bg: #262626;
+  --accent: #e8e8e8;
+  --accent-fg: #1a1a1a;
+  --danger: #e74c3c;
+  --code-bg: #2a2a2a;
+  --warn-bg: #3a3417;
+  --warn-border: #5e5524;
+}
+
 * {
   box-sizing: border-box;
 }
@@ -9,8 +46,8 @@ body,
 }
 body {
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-  color: #1a1a1a;
-  background: #fff;
+  color: var(--fg);
+  background: var(--bg);
   -webkit-text-size-adjust: 100%;
   text-size-adjust: 100%;
 }
@@ -21,8 +58,9 @@ body {
 button {
   font: inherit;
   cursor: pointer;
-  border: 1px solid #d0d0d0;
-  background: #f7f7f7;
+  color: var(--fg);
+  border: 1px solid var(--border-strong);
+  background: var(--btn-bg);
   border-radius: 4px;
   padding: 4px 8px;
 }
@@ -32,7 +70,9 @@ button.ghost {
 }
 input {
   font: inherit;
-  border: 1px solid #d0d0d0;
+  color: var(--fg);
+  background: var(--input-bg);
+  border: 1px solid var(--border-strong);
   border-radius: 4px;
   padding: 8px;
 }
@@ -42,7 +82,7 @@ input {
   display: flex;
   align-items: center;
   justify-content: center;
-  color: #888;
+  color: var(--fg-muted);
 }
 
 /* login */
@@ -55,11 +95,11 @@ input {
 .login h1 {
   margin: 0 0 8px;
   font-size: 20px;
-  color: #1a1a1a;
+  color: var(--fg);
   text-align: center;
 }
 .login .err {
-  color: #c0392b;
+  color: var(--danger);
   font-size: 13px;
   margin: 0;
 }
@@ -67,9 +107,9 @@ input {
   min-height: 65px;
 }
 .login button[type="submit"] {
-  background: #1a1a1a;
-  color: #fff;
-  border-color: #1a1a1a;
+  background: var(--accent);
+  color: var(--accent-fg);
+  border-color: var(--accent);
   padding: 9px;
   font-weight: 600;
 }
@@ -82,8 +122,8 @@ input {
 .sidebar {
   width: 240px;
   flex-shrink: 0;
-  border-right: 1px solid #e5e5e5;
-  background: #fafafa;
+  border-right: 1px solid var(--border);
+  background: var(--surface);
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -92,38 +132,38 @@ input {
   display: flex;
   gap: 6px;
   padding: 10px;
-  border-bottom: 1px solid #e5e5e5;
+  border-bottom: 1px solid var(--border);
 }
 .side-head button {
   flex: 1;
 }
 .side-tabs {
   display: flex;
-  border-bottom: 1px solid #e5e5e5;
+  border-bottom: 1px solid var(--border);
 }
 .side-tabs .tab {
   flex: 1;
   border: none;
   border-radius: 0;
-  background: #fafafa;
-  color: #888;
+  background: var(--surface);
+  color: var(--fg-muted);
   padding: 6px 0;
 }
 .side-tabs .tab.active {
-  background: #ececec;
-  color: #1a1a1a;
+  background: var(--surface-2);
+  color: var(--fg);
   font-weight: 600;
 }
 .search {
   margin: 8px;
   padding: 6px 8px;
-  border: 1px solid #ddd;
+  border: 1px solid var(--border-strong);
   border-radius: 4px;
 }
 .restore {
   border: none;
   background: transparent;
-  color: #888;
+  color: var(--fg-muted);
   padding: 0 4px;
   font-size: 15px;
   line-height: 1;
@@ -143,7 +183,7 @@ input {
   align-items: center;
   gap: 6px;
   padding: 8px 10px;
-  border-bottom: 1px solid #eee;
+  border-bottom: 1px solid var(--border);
   font-size: 14px;
   cursor: pointer;
 }
@@ -151,10 +191,10 @@ input {
   cursor: default;
 }
 .memo-list li.active {
-  background: #ececec;
+  background: var(--surface-2);
 }
 .memo-list li.empty {
-  color: #aaa;
+  color: var(--fg-faint);
   cursor: default;
 }
 .memo-title {
@@ -166,13 +206,13 @@ input {
 .del {
   border: none;
   background: transparent;
-  color: #bbb;
+  color: var(--fg-faint);
   padding: 0 4px;
   font-size: 16px;
   line-height: 1;
 }
 .del:hover {
-  color: #c0392b;
+  color: var(--danger);
 }
 
 .main {
@@ -186,7 +226,7 @@ input {
   align-items: center;
   gap: 10px;
   padding: 6px 10px;
-  border-bottom: 1px solid #e5e5e5;
+  border-bottom: 1px solid var(--border);
 }
 .topbar-actions {
   margin-left: auto; /* push the button group to the top-right */
@@ -202,10 +242,10 @@ input {
 }
 .status {
   font-size: 12px;
-  color: #999;
+  color: var(--fg-muted);
 }
 .status.offline {
-  color: #c0392b;
+  color: var(--danger);
 }
 
 .pane {
@@ -219,10 +259,12 @@ input {
   outline: none;
   resize: none;
   padding: 20px;
+  color: var(--fg);
+  background: var(--bg);
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 16px; /* >=16px avoids iOS zoom-on-focus */
   line-height: 1.6;
-  border-right: 1px solid #e5e5e5;
+  border-right: 1px solid var(--border);
 }
 .preview {
   width: 50%;
@@ -230,7 +272,7 @@ input {
   overflow-y: auto;
 }
 .preview-skipped {
-  color: #999;
+  color: var(--fg-muted);
   font-size: 13px;
 }
 
@@ -239,13 +281,13 @@ input {
   align-items: center;
   gap: 10px;
   padding: 6px 12px;
-  background: #fff3cd;
-  border-bottom: 1px solid #ffe69c;
+  background: var(--warn-bg);
+  border-bottom: 1px solid var(--warn-border);
   font-size: 13px;
 }
 .conflict button {
   border: 1px solid #d9b500;
-  background: #fff;
+  background: var(--btn-bg);
   padding: 2px 8px;
 }
 
@@ -279,17 +321,17 @@ input {
 .markdown h1,
 .markdown h2,
 .markdown h3 {
-  border-bottom: 1px solid #eee;
+  border-bottom: 1px solid var(--border);
   padding-bottom: 0.2em;
 }
 .markdown pre {
-  background: #f4f4f4;
+  background: var(--code-bg);
   padding: 12px;
   border-radius: 4px;
   overflow-x: auto;
 }
 .markdown code {
-  background: #f4f4f4;
+  background: var(--code-bg);
   padding: 2px 4px;
   border-radius: 3px;
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
@@ -302,15 +344,15 @@ input {
 .markdown blockquote {
   margin: 0;
   padding-left: 12px;
-  border-left: 3px solid #ddd;
-  color: #666;
+  border-left: 3px solid var(--border-strong);
+  color: var(--fg-muted);
 }
 .markdown table {
   border-collapse: collapse;
 }
 .markdown th,
 .markdown td {
-  border: 1px solid #ddd;
+  border: 1px solid var(--border-strong);
   padding: 4px 8px;
 }
 .markdown img {

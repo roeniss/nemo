@@ -65,6 +65,11 @@ export default function App() {
   const [currentId, setCurrentId] = useState<number | null>(null);
   const [content, setContent] = useState("");
   const [sidebar, setSidebar] = useState(() => window.innerWidth > 640); // closed by default on mobile
+  // theme: the boot script in index.html already set data-theme before paint;
+  // read it back so the toggle reflects the actual state
+  const [theme, setTheme] = useState<"light" | "dark">(
+    () => (document.documentElement.dataset.theme === "dark" ? "dark" : "light")
+  );
   const [saving, setSaving] = useState(false);
   const [offline, setOffline] = useState(false);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -681,6 +686,15 @@ export default function App() {
     return () => window.removeEventListener("beforeunload", onUnload);
   }, []);
 
+  // apply + persist the theme; keep the browser chrome (theme-color) in sync
+  useEffect(() => {
+    document.documentElement.dataset.theme = theme;
+    localStorage.setItem("qm-theme", theme);
+    document
+      .querySelector('meta[name="theme-color"]')
+      ?.setAttribute("content", theme === "dark" ? "#1a1a1a" : "#ffffff");
+  }, [theme]);
+
   // recover the moment the browser reports the network is back
   useEffect(() => {
     window.addEventListener("online", recover);
@@ -826,6 +840,13 @@ export default function App() {
             {offline ? "Offline — saved locally" : saving ? "Saving…" : "Saved"}
           </span>
           <div className="topbar-actions">
+            <button
+              className="ghost theme-toggle"
+              onClick={() => setTheme((t) => (t === "dark" ? "light" : "dark"))}
+              title={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
+            >
+              {theme === "dark" ? "☀️" : "🌙"}
+            </button>
             <button
               className="download"
               onClick={downloadMemo}

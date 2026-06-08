@@ -109,6 +109,19 @@ app.get("/api/trash", async (c) => {
   return c.json(results);
 });
 
+// read a single trashed memo's full content — lets the trash view show each
+// document. Separate from GET /api/memos/:id (which 404s on trashed rows, a
+// contract the multi-session "deleted elsewhere" detection relies on).
+app.get("/api/trash/:id", async (c) => {
+  const row = await c.env.DB.prepare(
+    "SELECT * FROM memos WHERE id = ? AND deleted_at IS NOT NULL AND hidden_at IS NULL"
+  )
+    .bind(c.req.param("id"))
+    .first();
+  if (!row) return c.json({ error: "not found" }, 404);
+  return c.json(row);
+});
+
 app.post("/api/memos/:id/restore", async (c) => {
   await c.env.DB.prepare("UPDATE memos SET deleted_at = NULL, hidden_at = NULL WHERE id = ?")
     .bind(c.req.param("id"))

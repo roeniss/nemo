@@ -92,6 +92,25 @@ describe("memos", () => {
     expect(await (await req("/api/memos", { headers: h })).json()).toHaveLength(1);
   });
 
+  it("reads a single trashed memo's content (GET /api/trash/:id), 404 before delete and after hide", async () => {
+    const h = await authedHeaders();
+    const c = await (await req("/api/memos", { method: "POST", headers: h })).json();
+    await req(`/api/memos/${c.id}`, {
+      method: "PUT",
+      headers: h,
+      body: JSON.stringify({ content: "# Trashed\nbody", base: c.updated_at }),
+    });
+    // not in trash yet — the trash read 404s
+    expect((await req(`/api/trash/${c.id}`, { headers: h })).status).toBe(404);
+    await req(`/api/memos/${c.id}`, { method: "DELETE", headers: h });
+    const got = await req(`/api/trash/${c.id}`, { headers: h });
+    expect(got.status).toBe(200);
+    expect((await got.json()).content).toBe("# Trashed\nbody");
+    // once hidden it drops out of the trash read too
+    await req(`/api/memos/${c.id}/hide`, { method: "POST", headers: h });
+    expect((await req(`/api/trash/${c.id}`, { headers: h })).status).toBe(404);
+  });
+
   it("hides a trashed memo from the trash view while keeping the row in the DB", async () => {
     const h = await authedHeaders();
     const c = await (await req("/api/memos", { method: "POST", headers: h })).json();

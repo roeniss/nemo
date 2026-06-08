@@ -1,17 +1,13 @@
-import { useState } from "react";
-import { type Memo, type MemoMeta, api, byRecent, isBlank, titleFrom, CONTENT_CACHE } from "./lib";
+import { type Memo, type MemoMeta, api, byRecent, titleFrom, CONTENT_CACHE } from "./lib";
 import { kv } from "./idb";
 
 // text file extensions — used alongside the MIME type and a NUL-byte sniff to keep binaries out
 const TEXT_EXT =
   /\.(txt|text|md|markdown|mdown|csv|tsv|json|jsonc|log|ya?ml|toml|ini|conf|env|xml|html?|css|scss|js|mjs|cjs|jsx|ts|tsx|py|rb|go|rs|c|h|cc|cpp|hpp|java|kt|swift|php|sh|bash|zsh|sql|svg|diff|patch|gitignore)$/i;
-const IMPORT_CONFIRM_BYTES = 100 * 1024; // ask before loading a file this big into the body
 
 type ImportDeps = {
   content: string;
   currentIdRef: { current: number | null };
-  editorRef: { current: HTMLTextAreaElement | null };
-  onEdit: (value: string) => void;
   flash: (msg: string) => void;
   setMemos: (updater: (m: MemoMeta[]) => MemoMeta[]) => void;
 };
@@ -28,65 +24,62 @@ function looksImportable(file: File, text: string): boolean {
   return looksText && !text.includes("\u0000");
 }
 
-// Text-file import (picker + drag-drop, with a large-file confirmation) and .md export.
-export function useImport({ content, currentIdRef, editorRef, onEdit, flash, setMemos }: ImportDeps) {
-  const [pendingImport, setPendingImport] = useState<{ text: string; name: string; size: number } | null>(null);
-
-  // load imported text: into a blank memo it becomes the body with the file name as the
-  // title heading ("# tmp.txt"); otherwise it's inserted at the cursor
-  function applyImport(text: string, name: string) {
-    const el = editorRef.current;
-    const blank = isBlank(content);
-    let next: string;
-    let caret: number;
-    if (blank) {
-      next = `# ${name}\n\n${text}`;
-      caret = next.length;
-    } else {
-      const start = el ? el.selectionStart : content.length;
-      const end = el ? el.selectionEnd : content.length;
-      next = content.slice(0, start) + text + content.slice(end);
-      caret = start + text.length;
-    }
-    onEdit(next); // same path as typing → autosave + local persistence
-    requestAnimationFrame(() => {
-      const e2 = editorRef.current;
-      if (e2) {
-        e2.focus();
-        e2.setSelectionRange(caret, caret);
-      }
-    });
-    const size = text.length < 1024 ? `${text.length} B` : `${Math.round(text.length / 1024)} KB`;
-    flash(`Imported "${name}" (${size})`);
-  }
-
-  // files over IMPORT_CONFIRM_BYTES are held behind a confirmation (pendingImport → confirmImport)
-  async function importFile(file: File | null | undefined) {
-    if (!file) return;
+// File import (picker + drag-drop) and folder upload both register each file as
+// its own memo (filename → "# name" title heading), plus .md export.
+export function useImport({ content, currentIdRef, flash, setMemos }: ImportDeps) {
+  // turn one text file into a new memo on the server; returns its meta, or null
+  // if the file is a binary / unreadable / the request failed (caller tallies it)
+  async function createMemo(file: File): Promise<MemoMeta | null> {
     let text: string;
     try {
       text = await file.text();
     } catch {
-      flash("파일을 읽지 못했어요.");
-      return;
+      return null;
     }
-    if (!looksImportable(file, text)) {
-      flash("텍스트 파일만 업로드할 수 있어요.");
-      return;
+    if (!looksImportable(file, text)) return null;
+    const body = `# ${file.name}\n\n${text}`;
+    try {
+      const memo = (await (await api("/memos", { method: "POST" })).json()) as Memo;
+      const r = await api(`/memos/${memo.id}`, { method: "PUT", body: JSON.stringify({ content: body }) });
+      const { title, updated_at } = (await r.json()) as { title: string; updated_at: number };
+      kv.set(CONTENT_CACHE + memo.id, body); // cache for offline read
+      return { id: memo.id, title, updated_at };
+    } catch {
+      return null; // offline / server error
     }
-    if (currentIdRef.current == null) return; // a memo is always open (new-doc default)
-    if (file.size > IMPORT_CONFIRM_BYTES) {
-      setPendingImport({ text, name: file.name, size: file.size });
-      return;
-    }
-    applyImport(text, file.name);
   }
 
-  // upload a whole folder: register each file directly inside it as its own memo
-  // (filename → "# name" title heading). Non-recursive — files in subfolders are
-  // skipped via webkitRelativePath depth; binaries / unreadable files are skipped
-  // too, and the totals are surfaced in a summary toast.
-  async function importFolder(files: FileList | null | undefined) {
+  // register a batch of files as new memos and surface a summary toast; binaries /
+  // unreadable / failed files are skipped and counted
+  async function importFiles(files: File[], emptyMsg: string) {
+    const created: MemoMeta[] = [];
+    let skipped = 0;
+    for (const file of files) {
+      const meta = await createMemo(file);
+      if (meta) created.push(meta);
+      else skipped++;
+    }
+    if (created.length) {
+      setMemos((m) =>
+        [...created, ...m.filter((x) => !created.some((c) => c.id === x.id))].sort(byRecent)
+      );
+    }
+    if (created.length === 0) {
+      flash(skipped ? "등록할 텍스트 파일이 없어요." : emptyMsg);
+    } else {
+      flash(`${created.length}개 문서를 등록했어요${skipped ? ` (${skipped}개 건너뜀)` : ""}.`);
+    }
+  }
+
+  // file picker / drag-drop: each selected file becomes its own memo
+  function importFile(files: FileList | File[] | null | undefined) {
+    if (!files || files.length === 0) return;
+    return importFiles(Array.from(files), "파일이 비어 있어요.");
+  }
+
+  // folder picker: each file directly inside the folder becomes its own memo.
+  // Non-recursive — files in subfolders are skipped via webkitRelativePath depth.
+  function importFolder(files: FileList | null | undefined) {
     if (!files || files.length === 0) return;
     // a webkitdirectory pick yields the whole tree; webkitRelativePath is
     // "folder/file" for direct children and "folder/sub/file" deeper — keep depth 2
@@ -94,55 +87,7 @@ export function useImport({ content, currentIdRef, editorRef, onEdit, flash, set
       const rel = f.webkitRelativePath;
       return !rel || rel.split("/").length === 2;
     });
-    let added = 0;
-    let skipped = 0;
-    const created: MemoMeta[] = [];
-    for (const file of direct) {
-      let text: string;
-      try {
-        text = await file.text();
-      } catch {
-        skipped++;
-        continue;
-      }
-      if (!looksImportable(file, text)) {
-        skipped++;
-        continue;
-      }
-      const body = `# ${file.name}\n\n${text}`;
-      try {
-        const memo = (await (await api("/memos", { method: "POST" })).json()) as Memo;
-        const r = await api(`/memos/${memo.id}`, { method: "PUT", body: JSON.stringify({ content: body }) });
-        const { title, updated_at } = (await r.json()) as { title: string; updated_at: number };
-        kv.set(CONTENT_CACHE + memo.id, body); // cache for offline read
-        created.push({ id: memo.id, title, updated_at });
-        added++;
-      } catch {
-        skipped++; // offline / server error — count it and keep going
-      }
-    }
-    if (created.length) {
-      setMemos((m) =>
-        [...created, ...m.filter((x) => !created.some((c) => c.id === x.id))].sort(byRecent)
-      );
-    }
-    if (added === 0) {
-      flash(skipped ? "등록할 텍스트 파일이 없어요." : "폴더가 비어 있어요.");
-    } else {
-      flash(`${added}개 문서를 등록했어요${skipped ? ` (${skipped}개 건너뜀)` : ""}.`);
-    }
-  }
-
-  function confirmImport() {
-    if (!pendingImport) return;
-    const { text, name } = pendingImport;
-    setPendingImport(null);
-    applyImport(text, name);
-  }
-
-  function cancelImport() {
-    setPendingImport(null);
-    flash("가져오기 취소됨");
+    return importFiles(direct, "폴더가 비어 있어요.");
   }
 
   // download the current memo as a .md file (named after its title)
@@ -160,13 +105,5 @@ export function useImport({ content, currentIdRef, editorRef, onEdit, flash, set
     URL.revokeObjectURL(url);
   }
 
-  return {
-    pendingImport,
-    importFile,
-    importFolder,
-    confirmImport,
-    cancelImport,
-    downloadMemo,
-    resetImport: () => setPendingImport(null),
-  };
+  return { importFile, importFolder, downloadMemo };
 }

@@ -87,9 +87,9 @@ export default function App() {
   const fileRef = useRef<HTMLInputElement>(null); // hidden file picker for text import
   const folderRef = useRef<HTMLInputElement>(null); // hidden folder picker (each file → a memo)
   const { notice, flash } = useToast();
-  // text import (picker + drag-drop, large-file confirm), folder upload, and .md export
-  const { pendingImport, importFile, importFolder, confirmImport, cancelImport, downloadMemo, resetImport } =
-    useImport({ content, currentIdRef, editorRef, onEdit, flash, setMemos });
+  // file/folder import (each file → its own memo) and .md export
+  const { importFile, importFolder, downloadMemo } =
+    useImport({ content, currentIdRef, flash, setMemos });
   // always-latest openMemo, so the hashchange listener (registered once) never
   // calls a stale closure
   const openMemoRef = useRef<(id: number) => void>(() => {});
@@ -253,7 +253,6 @@ export default function App() {
     setConflict(false);
     deletedRef.current = false;
     setDeleted(false);
-    resetImport();
     lastSaveAt.current = Date.now();
     setCurrentId(id);
 
@@ -297,7 +296,6 @@ export default function App() {
     setConflict(false);
     deletedRef.current = false;
     setDeleted(false);
-    resetImport();
     lastSaveAt.current = Date.now();
     try {
       const memo = (await (await api("/memos", { method: "POST" })).json()) as Memo;
@@ -858,9 +856,9 @@ export default function App() {
             <button
               className="import"
               onClick={() => fileRef.current?.click()}
-              title="Import a text file into this memo"
+              title="Import text files — each becomes its own memo"
             >
-              ⬆ Import
+              ⬆ Files
             </button>
             <button
               className="import-folder"
@@ -893,11 +891,12 @@ export default function App() {
             ref={fileRef}
             className="file-input"
             type="file"
+            multiple
             accept=".txt,.md,.markdown,.csv,.json,.log,.yml,.yaml,.xml,text/*,application/json"
             style={{ display: "none" }}
             onChange={(e) => {
-              importFile(e.currentTarget.files?.[0]);
-              e.currentTarget.value = ""; // allow re-picking the same file
+              importFile(e.currentTarget.files);
+              e.currentTarget.value = ""; // allow re-picking the same file(s)
             }}
           />
         </div>
@@ -918,16 +917,6 @@ export default function App() {
           </div>
         )}
 
-        {pendingImport && (
-          <div className="conflict">
-            <span>
-              "{pendingImport.name}" ({Math.round(pendingImport.size / 1024)} KB) — 본문에 불러올까요?
-            </span>
-            <button onClick={confirmImport}>불러오기</button>
-            <button onClick={cancelImport}>취소</button>
-          </div>
-        )}
-
         {currentId == null ? (
           <div className="center">
             {loading ? "Loading…" : "Select a memo on the left, or create a new one."}
@@ -943,13 +932,13 @@ export default function App() {
                 if (e.dataTransfer?.types?.includes("Files")) e.preventDefault(); // allow drop
               }}
               onDrop={(e) => {
-                const f = e.dataTransfer?.files?.[0];
-                if (f) {
+                const files = e.dataTransfer?.files;
+                if (files && files.length) {
                   e.preventDefault(); // don't let the browser navigate to the file
-                  importFile(f);
+                  importFile(files); // each dropped file → its own new memo
                 }
               }}
-              placeholder="# Title&#10;&#10;Write in markdown…  (or drop/Import a .txt/.md file)"
+              placeholder="# Title&#10;&#10;Write in markdown…  (or drop a file to make a new memo)"
               spellcheck={false}
             />
             {previewTooBig ? (

@@ -10,6 +10,7 @@
     "test": "vitest run",
     "test:e2e": "playwright test",
     "typecheck": "tsc --noEmit",
+    "merge": "sh scripts/safe-merge.sh",
     "db:local": "wrangler d1 execute nemo-db --local --file=./schema.sql",
     "db:remote": "wrangler d1 execute nemo-db --remote --file=./schema.sql"
   },

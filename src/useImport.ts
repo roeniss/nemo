@@ -151,7 +151,7 @@ export function useImport({ content, currentIdRef, editorRef, onEdit, flash, set
   // download the current memo as a .md file (named after its title)
   function downloadMemo() {
     if (currentIdRef.current == null) return;
-    const name = (titleFrom(content) || "memo").replace(/[\/\\:*?"<>|]/g, "_").slice(0, 80);
+    const name = titleFrom(content).replace(/[\/\\:*?"<>|]/g, "_").slice(0, 80);
     const blob = new Blob([content], { type: "text/markdown;charset=utf-8" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");

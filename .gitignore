@@ -6,6 +6,9 @@ dist
 .env*.local
 learning.md
 
+# unit test coverage (vitest)
+coverage
+
 # e2e (playwright)
 test-results
 playwright-report

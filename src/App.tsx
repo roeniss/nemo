@@ -18,6 +18,8 @@ import {
   readList,
   writeList,
   byRecent,
+  foldDataUris,
+  expandDataUris,
 } from "./lib";
 import { useToast, usePreview } from "./hooks";
 import { useImport } from "./useImport";
@@ -64,7 +66,11 @@ export default function App() {
   // memos created this session that have never held content (auto-purged on leave)
   const freshIds = useRef<Set<number>>(new Set());
   const [currentId, setCurrentId] = useState<number | null>(null);
-  const [content, setContent] = useState("");
+  const [content, setContent] = useState(""); // source of truth: full bytes (saved/previewed/exported)
+  // editor view of `content` with inline base64 data-URIs folded to short markers
+  const [editorValue, setEditorValue] = useState("");
+  const foldMap = useRef<string[]>([]); // index → full base64 payload for the folds now shown
+
   const [sidebar, setSidebar] = useState(() => window.innerWidth > 640); // closed by default on mobile
   // theme: the boot script in index.html already set data-theme before paint;
   // read it back so the toggle reflects the actual state
@@ -209,7 +215,7 @@ export default function App() {
     setAuthed(false);
     setMemos([]);
     setCurrentId(null);
-    setContent("");
+    loadContent("");
   }
 
   // run any pending debounced save immediately
@@ -262,7 +268,7 @@ export default function App() {
     // draft beats cache; then revalidate against the server in the background
     const draft = kv.get(DRAFT + id);
     const local = draft ?? (id < 0 ? "" : kv.get(CONTENT_CACHE + id) ?? "");
-    setContent(local);
+    loadContent(local);
     loadedAt.current =
       (id < 0 ? readList(TEMPS_KEY) : readList(LIST_CACHE)).find((m) => m.id === id)?.updated_at ??
       0;
@@ -282,7 +288,7 @@ export default function App() {
       } else {
         // adopt server content only if it changed and the user isn't mid-edit
         if (timer.current == null && d == null && memo.content !== local) {
-          setContent(memo.content);
+          loadContent(memo.content);
         }
         loadedAt.current = memo.updated_at;
       }
@@ -304,7 +310,7 @@ export default function App() {
       const memo = (await (await api("/memos", { method: "POST" })).json()) as Memo;
       setMemos((m) => [{ id: memo.id, title: memo.title, updated_at: memo.updated_at }, ...m]);
       setCurrentId(memo.id);
-      setContent(NEW_DOC);
+      loadContent(NEW_DOC);
       loadedAt.current = memo.updated_at;
       freshIds.current.add(memo.id);
       focusOnOpen.current = true;
@@ -316,7 +322,7 @@ export default function App() {
       kv.set(DRAFT + id, NEW_DOC);
       setMemos((m) => [meta, ...m]);
       setCurrentId(id);
-      setContent(NEW_DOC);
+      loadContent(NEW_DOC);
       loadedAt.current = meta.updated_at;
       freshIds.current.add(id);
       focusOnOpen.current = true;
@@ -367,7 +373,7 @@ export default function App() {
       setMemos((ms) => ms.filter((x) => x.id !== id));
       if (currentId === id) {
         setCurrentId(null);
-        setContent("");
+        loadContent("");
       }
       return;
     }
@@ -381,7 +387,7 @@ export default function App() {
     setMemos((ms) => ms.filter((x) => x.id !== id));
     if (currentId === id) {
       setCurrentId(null);
-      setContent("");
+      loadContent("");
     }
     setUndo({ id, title: m?.title || "Untitled" });
     if (undoTimer.current) clearTimeout(undoTimer.current);
@@ -429,11 +435,28 @@ export default function App() {
     setTrash((t) => t.filter((x) => x.id !== id));
   }
 
-  function onEdit(value: string) {
+  // load full content into the editor: keep `content` as the full bytes, but show
+  // a folded view so inline base64 images don't bury the text. Call this wherever
+  // content arrives from the server / storage — never from a keystroke (it rebuilds
+  // the folds, which would move the cursor mid-edit).
+  function loadContent(value: string) {
     setContent(value);
+    const { display, map } = foldDataUris(value);
+    foldMap.current = map;
+    setEditorValue(display);
+  }
+
+  // editor changed (a keystroke, or an image pasted at the caret): `value` is the
+  // folded editor view. Mirror it to editorValue, then expand the fold markers
+  // back to full bytes so content/draft/preview/save never persist a marker. New
+  // base64 (e.g. a fresh paste) carries no marker and passes through untouched.
+  function onEdit(value: string) {
+    setEditorValue(value);
+    const full = expandDataUris(value, foldMap.current);
+    setContent(full);
     if (currentId == null) return;
     // local-first: persist to localStorage immediately, before any network call
-    kv.set(DRAFT + currentId, value);
+    kv.set(DRAFT + currentId, full);
     if (conflictRef.current || deletedRef.current) return; // resolve banner first; don't autosave
     if (timer.current) clearTimeout(timer.current);
     setSaving(true);
@@ -443,7 +466,7 @@ export default function App() {
     const delay = Math.max(0, Math.min(SAVE_DEBOUNCE, SAVE_MAX_WAIT - since));
     timer.current = setTimeout(() => {
       timer.current = null; // debounce fired — no edit pending (keeps the guard honest)
-      save(currentId, value);
+      save(currentId, full);
     }, delay);
   }
 
@@ -543,7 +566,7 @@ export default function App() {
     const id = currentIdRef.current;
     if (id == null) return;
     const memo = (await (await api(`/memos/${id}`)).json()) as Memo;
-    setContent(memo.content);
+    loadContent(memo.content);
     loadedAt.current = memo.updated_at;
     conflictRef.current = false;
     setConflict(false);
@@ -582,7 +605,7 @@ export default function App() {
       kv.set(CONTENT_CACHE + memo.id, body);
       setMemos((m) => [{ id: memo.id, title, updated_at }, ...m.filter((x) => x.id !== memo.id)].sort(byRecent));
       setCurrentId(memo.id); // currentId → hash effect points the URL at the new memo
-      setContent(body);
+      loadContent(body);
       loadedAt.current = updated_at;
     } catch {
       setOffline(true); // the draft for the new memo is the local safety net
@@ -601,7 +624,7 @@ export default function App() {
       setMemos((ms) => ms.filter((x) => x.id !== id));
     }
     setCurrentId(null); // currentId → hash effect clears the URL
-    setContent("");
+    loadContent("");
   }
 
   // periodic multi-session sync: refresh the list, and reload the open memo if
@@ -636,7 +659,7 @@ export default function App() {
         const memo = (await (await api(`/memos/${id}`)).json()) as Memo;
         kv.set(CONTENT_CACHE + id, memo.content);
         if (timer.current == null && currentIdRef.current === id) {
-          setContent(memo.content);
+          loadContent(memo.content);
           loadedAt.current = memo.updated_at;
         }
       } else if (!cur) {
@@ -993,7 +1016,7 @@ export default function App() {
             <textarea
               ref={editorRef}
               className="editor"
-              value={content}
+              value={editorValue}
               onChange={(e) => onEdit(e.currentTarget.value)}
               onPaste={(e) => {
                 // a pasted image is embedded inline as base64; everything else

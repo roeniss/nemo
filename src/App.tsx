@@ -87,9 +87,9 @@ export default function App() {
   const fileRef = useRef<HTMLInputElement>(null); // hidden file picker for text import
   const folderRef = useRef<HTMLInputElement>(null); // hidden folder picker (each file → a memo)
   const { notice, flash } = useToast();
-  // file/folder import (each file → its own memo) and .md export
-  const { importFile, importFolder, downloadMemo } =
-    useImport({ content, currentIdRef, flash, setMemos });
+  // file/folder import (each file → its own memo), image paste (base64 embed), and .md export
+  const { importFile, importFolder, pasteImage, downloadMemo } =
+    useImport({ content, currentIdRef, editorRef, onEdit, flash, setMemos });
   // always-latest openMemo, so the hashchange listener (registered once) never
   // calls a stale closure
   const openMemoRef = useRef<(id: number) => void>(() => {});
@@ -936,6 +936,11 @@ export default function App() {
               className="editor"
               value={content}
               onChange={(e) => onEdit(e.currentTarget.value)}
+              onPaste={(e) => {
+                // a pasted image is embedded inline as base64; everything else
+                // falls through to the normal text paste
+                if (pasteImage(e.clipboardData)) e.preventDefault();
+              }}
               onDragOver={(e) => {
                 if (e.dataTransfer?.types?.includes("Files")) e.preventDefault(); // allow drop
               }}
@@ -946,7 +951,7 @@ export default function App() {
                   importFile(files); // each dropped file → its own new memo
                 }
               }}
-              placeholder="# Title&#10;&#10;Write in markdown…  (or drop a file to make a new memo)"
+              placeholder="# Title&#10;&#10;Write in markdown…  (drop a file for a new memo · paste an image to embed)"
               spellcheck={false}
             />
             {previewTooBig ? (

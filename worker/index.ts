@@ -8,10 +8,19 @@ type Bindings = {
   AUTH_PASS: string;
   JWT_SECRET: string;
   TURNSTILE_SECRET?: string; // bot protection — enforced only when set
+  // history snapshot thresholds (ms); default to 1h. Overridden small in dev/e2e.
+  HISTORY_GAP_MS?: string;
+  HISTORY_SESSION_MS?: string;
 };
 
 const COOKIE = "token";
 const MAX_AGE = 60 * 60 * 24 * 30; // 30d
+const HOUR = 60 * 60 * 1000;
+
+// idle gap that ends an editing session, and the max a session can run before we
+// snapshot anyway — both default to 1h, so a memo gets at most ~one snapshot/hour.
+const sessionGap = (env: Bindings) => Number(env.HISTORY_GAP_MS) || HOUR;
+const maxSession = (env: Bindings) => Number(env.HISTORY_SESSION_MS) || HOUR;
 
 const app = new Hono<{ Bindings: Bindings }>();
 
@@ -151,21 +160,49 @@ app.get("/api/memos/:id", async (c) => {
 app.put("/api/memos/:id", async (c) => {
   const { content, base } = await c.req.json<{ content: string; base?: number | null }>();
   const id = c.req.param("id");
+
+  // current server state — drives both the conflict check and history snapshots
+  const prev = await c.env.DB.prepare(
+    "SELECT updated_at, created_at, content, title FROM memos WHERE id = ? AND deleted_at IS NULL"
+  )
+    .bind(id)
+    .first<{ updated_at: number; created_at: number; content: string; title: string }>();
+
   // optimistic concurrency: if the row was updated elsewhere since `base`,
   // reject instead of silently clobbering. (base omitted = force overwrite)
   if (base != null) {
-    const cur = await c.env.DB.prepare(
-      "SELECT updated_at FROM memos WHERE id = ? AND deleted_at IS NULL"
-    )
-      .bind(id)
-      .first<{ updated_at: number }>();
-    if (!cur) return c.json({ error: "not found" }, 404);
-    if (cur.updated_at > base) {
-      return c.json({ conflict: true, updated_at: cur.updated_at }, 409);
+    if (!prev) return c.json({ error: "not found" }, 404);
+    if (prev.updated_at > base) {
+      return c.json({ conflict: true, updated_at: prev.updated_at }, 409);
     }
   }
-  const title = titleFrom(content);
+
   const now = Date.now();
+
+  // session-snapshot history: when a new editing session begins, preserve the
+  // prior session's final state into memo_versions. A "new session" is either a
+  // >=1h idle gap since the last save (sessionGap), or continuous editing that
+  // has run >=1h since the last snapshot (maxSession) — so a memo accrues at most
+  // ~one snapshot per hour. Skipped when the content is empty or unchanged.
+  if (prev && prev.content && prev.content !== content) {
+    const last = await c.env.DB.prepare(
+      "SELECT MAX(created_at) AS at FROM memo_versions WHERE memo_id = ?"
+    )
+      .bind(id)
+      .first<{ at: number | null }>();
+    const since = last?.at ?? prev.created_at; // baseline before any snapshot exists
+    const idleGap = now - prev.updated_at >= sessionGap(c.env);
+    const longRun = prev.updated_at - since >= maxSession(c.env);
+    if (idleGap || longRun) {
+      await c.env.DB.prepare(
+        "INSERT INTO memo_versions (memo_id, title, content, created_at) VALUES (?, ?, ?, ?)"
+      )
+        .bind(id, prev.title, prev.content, prev.updated_at)
+        .run();
+    }
+  }
+
+  const title = titleFrom(content);
   await c.env.DB.prepare(
     "UPDATE memos SET title = ?, content = ?, updated_at = ? WHERE id = ?"
   )
@@ -174,11 +211,33 @@ app.put("/api/memos/:id", async (c) => {
   return c.json({ ok: true, title, updated_at: now });
 });
 
+// history: list a memo's preserved past states, newest first (no content — the
+// list stays light; fetch a single version's content via :versionId)
+app.get("/api/memos/:id/versions", async (c) => {
+  const { results } = await c.env.DB.prepare(
+    "SELECT id, title, created_at FROM memo_versions WHERE memo_id = ? ORDER BY created_at DESC"
+  )
+    .bind(c.req.param("id"))
+    .all();
+  return c.json(results);
+});
+
+app.get("/api/memos/:id/versions/:versionId", async (c) => {
+  const row = await c.env.DB.prepare(
+    "SELECT id, memo_id, title, content, created_at FROM memo_versions WHERE id = ? AND memo_id = ?"
+  )
+    .bind(c.req.param("versionId"), c.req.param("id"))
+    .first();
+  if (!row) return c.json({ error: "not found" }, 404);
+  return c.json(row);
+});
+
 app.delete("/api/memos/:id", async (c) => {
   const id = c.req.param("id");
   if (c.req.query("purge") === "1") {
-    // hard delete — used to clean up never-used empty memos
+    // hard delete — used to clean up never-used empty memos; drop its history too
     await c.env.DB.prepare("DELETE FROM memos WHERE id = ?").bind(id).run();
+    await c.env.DB.prepare("DELETE FROM memo_versions WHERE memo_id = ?").bind(id).run();
   } else {
     // soft delete: mark deleted, keep the row
     await c.env.DB.prepare("UPDATE memos SET deleted_at = ? WHERE id = ?")

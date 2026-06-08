@@ -1,13 +1,18 @@
 name: Deploy
 
 on:
-  push:
+  # run only after CI completes on main (gated on success below)
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
     branches: [main]
   workflow_dispatch:
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
+    # manual runs always proceed; CI-triggered runs only when CI passed
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
     steps:
       - uses: actions/checkout@v6
 
@@ -17,12 +22,6 @@ jobs:
           cache: npm
 
       - run: npm ci
-
-      - name: Typecheck
-        run: npm run typecheck
-
-      - name: Test
-        run: npm test
 
       - name: Build & deploy to Cloudflare Workers
         run: npm run deploy

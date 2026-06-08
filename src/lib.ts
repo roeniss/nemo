@@ -57,31 +57,3 @@ export function writeList(key: string, v: MemoMeta[]) {
 }
 
 export const byRecent = (a: MemoMeta, b: MemoMeta) => b.updated_at - a.updated_at;
-
-// ── inline base64 image folding (editor view only) ──────────────────────────
-// Pasted screenshots embed as multi-KB `data:...;base64,XXXX` blobs that bury the
-// rest of a memo under an unreadable wall of text. For the EDITOR display we fold
-// each long payload down to a short marker; the saved / previewed / exported
-// content always keeps the full bytes, so folding never risks losing an image.
-//
-// The marker carries its own index (`fold:N`) so deleting or reordering one fold
-// never corrupts the others, and an unknown index expands back to itself (a no-op)
-// rather than dropping data.
-const DATA_URI = /(data:[\w.+-]+\/[\w.+-]+;base64,)([A-Za-z0-9+/=]{256,})/g;
-const FOLDED = /(data:[\w.+-]+\/[\w.+-]+;base64,)⟨🖼[^⟩]*fold:(\d+)⟩/gu;
-
-export function foldDataUris(text: string): { display: string; map: string[] } {
-  const map: string[] = [];
-  const display = text.replace(DATA_URI, (_m, prefix: string, payload: string) => {
-    const n = map.push(payload) - 1;
-    const kb = Math.max(1, Math.round((payload.length * 3) / 4 / 1024)); // base64 → bytes → KB
-    return `${prefix}⟨🖼 ${kb}KB · fold:${n}⟩`;
-  });
-  return { display, map };
-}
-
-export function expandDataUris(display: string, map: string[]): string {
-  return display.replace(FOLDED, (m, prefix: string, n: string) =>
-    map[+n] != null ? prefix + map[+n] : m
-  );
-}

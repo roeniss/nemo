@@ -52,6 +52,7 @@ export default function App() {
   const [memos, setMemos] = useState<MemoMeta[]>([]);
   const [trash, setTrash] = useState<MemoMeta[]>([]);
   const [view, setView] = useState<"memos" | "trash">("memos");
+  const [viewing, setViewing] = useState<Memo | null>(null); // trashed memo open in read-only view
   const [query, setQuery] = useState("");
   const [undo, setUndo] = useState<{ id: number; title: string } | null>(null);
   const undoTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -249,6 +250,7 @@ export default function App() {
 
   async function openMemo(id: number) {
     await leaveCurrent();
+    setViewing(null); // leaving any read-only trash view
     conflictRef.current = false;
     setConflict(false);
     deletedRef.current = false;
@@ -292,6 +294,7 @@ export default function App() {
 
   async function newMemo() {
     await leaveCurrent();
+    setViewing(null); // leaving any read-only trash view
     conflictRef.current = false;
     setConflict(false);
     deletedRef.current = false;
@@ -398,8 +401,22 @@ export default function App() {
     setTrash((await (await api("/trash")).json()) as MemoMeta[]);
   }
 
+  // open a trashed memo read-only so its content can be inspected before
+  // deciding to restore or hide it
+  async function viewTrash(id: number) {
+    const r = await api(`/trash/${id}`);
+    if (!r.ok) {
+      // already restored/hidden in another session — refresh the list
+      setViewing((v) => (v?.id === id ? null : v));
+      loadTrash();
+      return;
+    }
+    setViewing((await r.json()) as Memo);
+  }
+
   async function restoreMemo(id: number) {
     await api(`/memos/${id}/restore`, { method: "POST" });
+    setViewing((v) => (v?.id === id ? null : v));
     setTrash((t) => t.filter((x) => x.id !== id));
     setMemos((await (await api("/memos")).json()) as MemoMeta[]);
   }
@@ -408,6 +425,7 @@ export default function App() {
   // it's just excluded from the trash listing server-side
   async function hideTrash(id: number) {
     await api(`/memos/${id}/hide`, { method: "POST" });
+    setViewing((v) => (v?.id === id ? null : v));
     setTrash((t) => t.filter((x) => x.id !== id));
   }
 
@@ -715,7 +733,11 @@ export default function App() {
   }, [offline]);
 
   // debounced, size-capped live markdown preview
-  const { html, tooBig: previewTooBig, size: previewSize } = usePreview(content);
+  // the preview renders the editor content, or the read-only trash memo when one
+  // is open (the editor is hidden in that case, so there's no contention)
+  const { html, tooBig: previewTooBig, size: previewSize } = usePreview(
+    viewing ? viewing.content : content
+  );
   const visibleMemos = useMemo(() => {
     const q = query.trim().toLowerCase();
     return q ? memos.filter((m) => m.title.toLowerCase().includes(q)) : memos;
@@ -761,7 +783,10 @@ export default function App() {
           <div className="side-tabs">
             <button
               className={view === "memos" ? "tab active" : "tab"}
-              onClick={() => setView("memos")}
+              onClick={() => {
+                setView("memos");
+                setViewing(null);
+              }}
             >
               Memos
             </button>
@@ -813,19 +838,29 @@ export default function App() {
           ) : (
             <ul className="memo-list">
               {trash.map((m) => (
-                <li key={m.id}>
+                <li
+                  key={m.id}
+                  className={m.id === viewing?.id ? "active" : ""}
+                  onClick={() => viewTrash(m.id)}
+                >
                   <span className="memo-title">{m.title || "Untitled"}</span>
                   <button
                     className="restore"
                     title="Restore"
-                    onClick={() => restoreMemo(m.id)}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      restoreMemo(m.id);
+                    }}
                   >
                     ↩
                   </button>
                   <button
                     className="del"
                     title="Hide"
-                    onClick={() => hideTrash(m.id)}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      hideTrash(m.id);
+                    }}
                   >
                     ×
                   </button>
@@ -925,7 +960,31 @@ export default function App() {
           </div>
         )}
 
-        {currentId == null ? (
+        {viewing && (
+          <div className="conflict">
+            <span>휴지통의 메모입니다 (읽기 전용).</span>
+            <button onClick={() => restoreMemo(viewing.id)}>복구</button>
+            <button onClick={() => hideTrash(viewing.id)}>숨기기</button>
+          </div>
+        )}
+
+        {viewing ? (
+          <div className="pane">
+            <textarea
+              className="editor"
+              value={viewing.content}
+              readOnly
+              spellcheck={false}
+            />
+            {previewTooBig ? (
+              <div className="preview markdown preview-skipped">
+                미리보기 생략 — 문서가 너무 커요 ({Math.round(previewSize / 1024)} KB).
+              </div>
+            ) : (
+              <div className="preview markdown" dangerouslySetInnerHTML={{ __html: html }} />
+            )}
+          </div>
+        ) : currentId == null ? (
           <div className="center">
             {loading ? "Loading…" : "Select a memo on the left, or create a new one."}
           </div>

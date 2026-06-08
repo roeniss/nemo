@@ -33,6 +33,39 @@ test.describe("trash", () => {
     }
   });
 
+  test("clicking a trashed memo shows its content read-only", async ({ page, request }) => {
+    const title = uniq("TrashV");
+    const id = await seedMemo(request, `# ${title}\n\nhidden body text`);
+    try {
+      await page.goto("/");
+      await page.reload();
+      const row = page.locator(`${sel.list}:has(.memo-title:text-is("${title}"))`);
+      await expect(row).toBeVisible();
+      await row.locator(".del").click();
+      await expect(row).toHaveCount(0);
+
+      // open it from the Trash view
+      await page.click(trashTab);
+      const trashRow = page.locator(`${sel.list}:has(.memo-title:text-is("${title}"))`);
+      await trashRow.click();
+
+      // content shows, read-only, with the restore/hide banner
+      const editor = page.locator("textarea.editor");
+      await expect(editor).toHaveValue(`# ${title}\n\nhidden body text`);
+      await expect(editor).toHaveAttribute("readonly", "");
+      await expect(page.locator(".conflict")).toContainText("읽기 전용");
+      await expect(page.locator(".preview.markdown")).toContainText("hidden body text");
+
+      // restoring from the banner closes the read-only view and returns it to Memos
+      await page.locator(".conflict button", { hasText: "복구" }).click();
+      await expect(page.locator(".conflict")).toHaveCount(0);
+      await page.click(memosTab);
+      await expect(page.locator(`.memo-title:text-is("${title}")`)).toBeVisible();
+    } finally {
+      await purge(request, id);
+    }
+  });
+
   test("hide permanently removes a memo from the Trash view", async ({ page, request }) => {
     const title = uniq("TrashH");
     const id = await seedMemo(request, `# ${title}\n\nbody`);

@@ -18,7 +18,7 @@ env:
 
 jobs:
   unit:
-    name: typecheck + unit
+    name: typecheck + unit + coverage
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -28,7 +28,9 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run typecheck
-      - run: npm test
+      # enforces the 95% coverage thresholds in vitest.config.ts — fails the
+      # build (and so blocks deploy) if any metric drops below 95%
+      - run: npm run test:coverage
 
   e2e:
     name: e2e (playwright)

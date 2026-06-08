@@ -106,7 +106,9 @@ export default function App() {
   const { importFile, importFolder, pasteImage, downloadMemo } =
     useImport({ content, currentIdRef, editorRef, onEdit, flash, setMemos });
   // always-latest openMemo, so the hashchange listener (registered once) never
-  // calls a stale closure
+  // calls a stale closure. Reassigned to openMemo synchronously on the first render
+  // (below), before any listener can fire — so this placeholder is never invoked.
+  /* v8 ignore next */
   const openMemoRef = useRef<(id: number) => void>(() => {});
 
   // background auth check + list — UI is already on screen; this fills it in
@@ -426,6 +428,9 @@ export default function App() {
   }
 
   async function undoDelete() {
+    // the Undo button only renders inside `{undo && …}`, so undoDelete can never
+    // fire with undo === null — this guard is defensive and unreachable
+    /* v8 ignore next */
     if (!undo) return;
     const id = undo.id;
     if (undoTimer.current) clearTimeout(undoTimer.current);
@@ -468,6 +473,9 @@ export default function App() {
 
   function onEdit(value: string) {
     setContent(value);
+    // onEdit only fires from the editor textarea / paste-insert, which mount only
+    // when currentId != null — so this guard is defensive and unreachable
+    /* v8 ignore next */
     if (currentId == null) return;
     // local-first: persist to localStorage immediately, before any network call
     kv.set(DRAFT + currentId, value);

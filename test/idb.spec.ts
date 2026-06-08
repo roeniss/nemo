@@ -187,6 +187,31 @@ describe("degradation paths", () => {
     spy.mockRestore();
   });
 
+  it("hydrate rejects internally when the hydrate cursor errors (cursor onerror)", async () => {
+    const mod = await freshImport();
+    // Provide a db whose openCursor request fires onerror — exercising the cursor's
+    // `req.onerror = () => reject(req.error)` arm. hydrate()'s try/catch then swallows
+    // the rejection and resolves, so the app still boots when hydration fails midway.
+    const fakeDb = {
+      transaction: () => ({
+        objectStore: () => ({
+          openCursor: () => {
+            const req: any = { onsuccess: null, onerror: null, error: new Error("cursor boom") };
+            setTimeout(() => req.onerror && req.onerror(), 0);
+            return req;
+          },
+        }),
+      }),
+    };
+    const spy = vi.spyOn(indexedDB, "open").mockImplementation(() => {
+      const req: any = { onupgradeneeded: null, onsuccess: null, onerror: null, result: fakeDb };
+      setTimeout(() => req.onsuccess && req.onsuccess(), 0);
+      return req;
+    });
+    await expect(mod.hydrate()).resolves.toBeUndefined();
+    spy.mockRestore();
+  });
+
   it("persist .catch swallows a rejected open()", async () => {
     const mod = await freshImport();
     const spy = vi.spyOn(indexedDB, "open").mockImplementation(() => {

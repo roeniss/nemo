@@ -72,6 +72,14 @@ function makeServer() {
     if (path === "/trash" && method === "GET") {
       return json(trash.map(meta));
     }
+    // read a single trashed memo's full content (trash-view-document feature)
+    let tv = path.match(/^\/trash\/(-?\d+)$/);
+    if (tv && method === "GET") {
+      const id = Number(tv[1]);
+      const row = trash.find((x) => x.id === id);
+      if (!row) return new Response("", { status: 404 });
+      return json(row);
+    }
 
     // ---- per-memo ----
     let m = path.match(/^\/memos\/(-?\d+)$/);
@@ -1804,29 +1812,6 @@ describe("openMemo temp with no draft (id<0 empty arm)", () => {
   });
 });
 
-describe("preview too big", () => {
-  it("renders the preview-skipped placeholder for a very large document", async () => {
-    authedBoot();
-    const row = server.seed({ title: "Huge", content: "# Huge\n\nstart" });
-    location.hash = "#" + row.id;
-    const { container } = render(<App />);
-    await waitFor(() =>
-      expect((container.querySelector("textarea.editor") as HTMLTextAreaElement)?.value).toContain("start")
-    );
-    // type a >200_000-char body → usePreview flags tooBig → the skipped placeholder
-    const ta = container.querySelector("textarea.editor") as HTMLTextAreaElement;
-    const huge = "# Huge\n\n" + "a".repeat(210_000);
-    await act(async () => {
-      fireEvent.input(ta, { target: { value: huge } });
-    });
-    await waitFor(
-      () => expect(container.querySelector(".preview-skipped")).toBeTruthy(),
-      { timeout: 3000 }
-    );
-    expect(container.querySelector(".preview-skipped")?.textContent).toContain("미리보기 생략");
-  });
-});
-
 describe("discardDeleted removes the open real memo from the list", () => {
   it("filters the trashed-elsewhere memo out of the sidebar", async () => {
     authedBoot();
@@ -2087,3 +2072,477 @@ describe("onDragOver without a Files payload (else arm)", () => {
     expect(prevented).toBe(false);
   });
 });
+
+// ===========================================================================
+// TRASH VIEW DOCUMENT (read-only inspect, then restore / hide from the banner)
+// ===========================================================================
+// helper: open the Trash tab with one trashed memo, returning its container
+async function openTrashWith(container: HTMLElement, ...seeded: { id: number }[]) {
+  // move the seeded rows into the trash
+  for (const s of seeded) {
+    const idx = server.memos.findIndex((m) => m.id === s.id);
+    if (idx !== -1) server.trash.push(...server.memos.splice(idx, 1));
+  }
+  const tabs = container.querySelectorAll(".side-tabs button");
+  await act(async () => {
+    fireEvent.click(tabs[1]); // Trash
+  });
+  await waitFor(() =>
+    expect(container.querySelectorAll(".memo-list .restore").length).toBe(seeded.length)
+  );
+}
+
+describe("trash view document", () => {
+  it("opens a trashed memo read-only, then restores it from the banner", async () => {
+    authedBoot();
+    const { container } = render(<App />);
+    await waitFor(() => expect(container.querySelector(".side-tabs")).toBeTruthy());
+    const a = server.seed({ title: "ViewA", content: "# ViewA\n\nlook at me" });
+    await openTrashWith(container as unknown as HTMLElement, a);
+
+    // click the trashed row body (not the action buttons) → viewTrash(id)
+    const row = Array.from(container.querySelectorAll(".memo-list li")).find(
+      (el) => el.querySelector(".memo-title")?.textContent === "ViewA"
+    )!;
+    await act(async () => {
+      fireEvent.click(row);
+    });
+    // read-only editor shows the trashed content + the trash banner appears
+    await waitFor(() =>
+      expect((container.querySelector("textarea.editor") as HTMLTextAreaElement)?.value).toContain("look at me")
+    );
+    expect((container.querySelector("textarea.editor") as HTMLTextAreaElement).readOnly).toBe(true);
+    expect(container.querySelector(".conflict span")?.textContent).toContain("휴지통");
+    // the open trashed row is marked active (m.id === viewing?.id true arm, line 921)
+    expect(container.querySelector(".memo-list li.active")).toBeTruthy();
+
+    // 복구 button (line 1054) → restoreMemo: viewing.id === id → setViewing(null)
+    const btns = container.querySelectorAll(".conflict button");
+    await act(async () => {
+      fireEvent.click(btns[0]); // 복구
+    });
+    // banner clears (viewing nulled), the row left the trash list
+    await waitFor(() => expect(container.querySelector(".conflict")).toBeFalsy());
+    expect(server.memos.some((m) => m.id === a.id)).toBe(true);
+  });
+
+  it("opens a trashed memo read-only, then hides it from the banner", async () => {
+    authedBoot();
+    const { container } = render(<App />);
+    await waitFor(() => expect(container.querySelector(".side-tabs")).toBeTruthy());
+    const b = server.seed({ title: "ViewB", content: "# ViewB\n\nhide me" });
+    await openTrashWith(container as unknown as HTMLElement, b);
+
+    const row = Array.from(container.querySelectorAll(".memo-list li")).find(
+      (el) => el.querySelector(".memo-title")?.textContent === "ViewB"
+    )!;
+    await act(async () => {
+      fireEvent.click(row);
+    });
+    await waitFor(() =>
+      expect((container.querySelector("textarea.editor") as HTMLTextAreaElement)?.value).toContain("hide me")
+    );
+
+    // 숨기기 button (line 1055) → hideTrash: viewing.id === id → setViewing(null)
+    const btns = container.querySelectorAll(".conflict button");
+    await act(async () => {
+      fireEvent.click(btns[1]); // 숨기기
+    });
+    await waitFor(() => expect(container.querySelector(".conflict")).toBeFalsy());
+    // hidden → gone from the trash list
+    await waitFor(() =>
+      expect(container.querySelector(".memo-list .empty")?.textContent).toBe("Trash is empty")
+    );
+  });
+
+  it("refreshes the trash list when the trashed memo was already gone (viewTrash !ok)", async () => {
+    authedBoot();
+    const { container } = render(<App />);
+    await waitFor(() => expect(container.querySelector(".side-tabs")).toBeTruthy());
+    const c = server.seed({ title: "ViewGone", content: "# ViewGone\n\nbody" });
+    await openTrashWith(container as unknown as HTMLElement, c);
+
+    // remove it from the trash server-side so GET /trash/:id 404s (restored/hidden elsewhere)
+    const ti = server.trash.findIndex((m) => m.id === c.id);
+    server.trash.splice(ti, 1);
+
+    const row = Array.from(container.querySelectorAll(".memo-list li")).find(
+      (el) => el.querySelector(".memo-title")?.textContent === "ViewGone"
+    )!;
+    await act(async () => {
+      fireEvent.click(row); // viewTrash → !r.ok → setViewing(v?.id===id?null:v) + loadTrash()
+    });
+    // no read-only trash banner appeared (the 404 path never set `viewing`), and the
+    // list refreshed to empty (loadTrash re-fetched the now-empty trash)
+    await new Promise((r) => setTimeout(r, 20));
+    expect(container.querySelector(".conflict")).toBeFalsy();
+    await waitFor(() =>
+      expect(container.querySelector(".memo-list .empty")?.textContent).toBe("Trash is empty")
+    );
+  });
+
+  it("clears the open read-only view when re-opening a row that 404s (viewTrash !ok, v?.id === id true)", async () => {
+    authedBoot();
+    const { container } = render(<App />);
+    await waitFor(() => expect(container.querySelector(".side-tabs")).toBeTruthy());
+    const a = server.seed({ title: "Vanish", content: "# Vanish\n\nbody" });
+    await openTrashWith(container as unknown as HTMLElement, a);
+
+    // open it read-only → viewing.id === a.id
+    const row = container.querySelector(".memo-list li") as HTMLElement;
+    await act(async () => {
+      fireEvent.click(row);
+    });
+    await waitFor(() => expect(container.querySelector(".conflict")).toBeTruthy());
+
+    // now it disappears from the trash server-side; re-clicking the SAME (still-listed)
+    // row → viewTrash 404s → setViewing(v => v?.id === id ? null : v) TRUE arm → null
+    const ti = server.trash.findIndex((m) => m.id === a.id);
+    server.trash.splice(ti, 1);
+    await act(async () => {
+      fireEvent.click(container.querySelector(".memo-list li") as HTMLElement);
+    });
+    // the read-only view closed (viewing nulled by the true arm)
+    await waitFor(() => expect(container.querySelector(".conflict")).toBeFalsy());
+  });
+
+  it("restores via the sidebar ↩ while NOT viewing that memo (v?.id === id false arm)", async () => {
+    authedBoot();
+    const { container } = render(<App />);
+    await waitFor(() => expect(container.querySelector(".side-tabs")).toBeTruthy());
+    const a = server.seed({ title: "Ra", content: "# Ra" });
+    const b = server.seed({ title: "Rb", content: "# Rb\n\nviewing this one" });
+    await openTrashWith(container as unknown as HTMLElement, a, b);
+
+    // open Rb in the read-only view, so viewing.id === b.id
+    const rbRow = Array.from(container.querySelectorAll(".memo-list li")).find(
+      (el) => el.querySelector(".memo-title")?.textContent === "Rb"
+    )!;
+    await act(async () => {
+      fireEvent.click(rbRow);
+    });
+    await waitFor(() => expect(container.querySelector(".conflict")).toBeTruthy());
+
+    // restore Ra via its sidebar ↩ button → restoreMemo(a.id): viewing.id (b) !== a.id
+    // → the `v?.id === id ? null : v` FALSE arm keeps the Rb view open
+    const raRow = Array.from(container.querySelectorAll(".memo-list li")).find(
+      (el) => el.querySelector(".memo-title")?.textContent === "Ra"
+    )!;
+    await act(async () => {
+      fireEvent.click(raRow.querySelector(".restore")!);
+    });
+    // Rb's view is still up (viewing not cleared)
+    await waitFor(() => expect(server.memos.some((m) => m.id === a.id)).toBe(true));
+    expect(container.querySelector(".conflict span")?.textContent).toContain("휴지통");
+  });
+
+  it("hides via the sidebar × while NOT viewing that memo (v?.id === id false arm)", async () => {
+    authedBoot();
+    const { container } = render(<App />);
+    await waitFor(() => expect(container.querySelector(".side-tabs")).toBeTruthy());
+    const a = server.seed({ title: "Ha", content: "# Ha" });
+    const b = server.seed({ title: "Hb", content: "# Hb\n\nstill viewing" });
+    await openTrashWith(container as unknown as HTMLElement, a, b);
+
+    const hbRow = Array.from(container.querySelectorAll(".memo-list li")).find(
+      (el) => el.querySelector(".memo-title")?.textContent === "Hb"
+    )!;
+    await act(async () => {
+      fireEvent.click(hbRow);
+    });
+    await waitFor(() => expect(container.querySelector(".conflict")).toBeTruthy());
+
+    // hide Ha via its sidebar × → hideTrash(a.id): viewing (b) !== a.id → keep the Hb view
+    const haRow = Array.from(container.querySelectorAll(".memo-list li")).find(
+      (el) => el.querySelector(".memo-title")?.textContent === "Ha"
+    )!;
+    await act(async () => {
+      fireEvent.click(haRow.querySelector(".del")!);
+    });
+    await waitFor(() =>
+      expect(
+        Array.from(container.querySelectorAll(".memo-title")).map((e) => e.textContent)
+      ).not.toContain("Ha")
+    );
+    // Hb's read-only view remains open
+    expect(container.querySelector(".conflict span")?.textContent).toContain("휴지통");
+  });
+
+  it("clears the read-only view when switching back to the Memos tab", async () => {
+    authedBoot();
+    const { container } = render(<App />);
+    await waitFor(() => expect(container.querySelector(".side-tabs")).toBeTruthy());
+    const a = server.seed({ title: "Switch", content: "# Switch\n\nbody" });
+    await openTrashWith(container as unknown as HTMLElement, a);
+    const row = container.querySelector(".memo-list li") as HTMLElement;
+    await act(async () => {
+      fireEvent.click(row);
+    });
+    await waitFor(() => expect(container.querySelector(".conflict")).toBeTruthy());
+    // Memos tab → setViewing(null), the read-only banner/view goes away
+    const tabs = container.querySelectorAll(".side-tabs button");
+    await act(async () => {
+      fireEvent.click(tabs[0]);
+    });
+    await waitFor(() => expect(container.querySelector(".search")).toBeTruthy());
+    expect(container.querySelector(".conflict")).toBeFalsy();
+  });
+});
+
+// ===========================================================================
+// deleteMemo: a FRESH real memo (positive id, created this session, blank) is
+// hard-purged instead of trashed (lines 391/393/404/405)
+// ===========================================================================
+describe("deleteMemo a fresh real memo", () => {
+  it("purges a never-used fresh memo (positive id) with a pending save timer", async () => {
+    authedBoot();
+    const { container } = render(<App />);
+    // boot creates a fresh blank real memo (positive id, in freshIds) and opens it
+    await waitFor(() => expect(container.querySelector("textarea.editor")).toBeTruthy());
+    const ta = container.querySelector("textarea.editor") as HTMLTextAreaElement;
+    // arm a debounced save (timer.current set) while the memo stays blank+fresh
+    await act(async () => {
+      fireEvent.input(ta, { target: { value: "#  " } });
+    });
+    // make the purge DELETE reject so deleteMemo's `catch { setOffline(true) }` runs (line 400)
+    const orig = server.fetchImpl;
+    const wrapped = vi.fn(async (input: any, init: any) => {
+      if (
+        (init?.method || "GET").toUpperCase() === "DELETE" &&
+        String(input).includes("purge=1")
+      ) {
+        throw new Error("offline purge");
+      }
+      return orig(input, init);
+    });
+    globalThis.fetch = wrapped as unknown as typeof fetch;
+
+    // delete the open fresh memo via its sidebar × → deleteMemo: freshIds.has(id) true,
+    // currentId === id && timer.current → clearTimeout (393), purge DELETE rejects →
+    // catch → setOffline (400), currentId === id → setCurrentId(null)/setContent("") (405)
+    const li = container.querySelector(".memo-list li") as HTMLElement;
+    await act(async () => {
+      fireEvent.click(li.querySelector(".del")!);
+    });
+    await waitFor(() => expect(container.querySelector(".center")).toBeTruthy());
+    expect(container.querySelector(".status.offline")).toBeTruthy();
+    // the purge DELETE was attempted (no undo toast — fresh memos skip trash)
+    await waitFor(() =>
+      expect(
+        wrapped.mock.calls.some(
+          ([u, i]) => String(u).includes("purge=1") && (i?.method || "").toUpperCase() === "DELETE"
+        )
+      ).toBe(true)
+    );
+    expect(container.querySelector(".toast")).toBeFalsy();
+  });
+
+  it("purges a fresh real memo that is NOT the open one (currentId !== id false arms)", async () => {
+    authedBoot();
+    const { container } = render(<App />);
+    await waitFor(() => expect(container.querySelector("textarea.editor")).toBeTruthy());
+    // create a SECOND fresh memo via + New; the previous fresh-blank one is purged on
+    // leave, so make the first non-blank first by typing, then create another.
+    const ta = container.querySelector("textarea.editor") as HTMLTextAreaElement;
+    await act(async () => {
+      fireEvent.input(ta, { target: { value: "# Kept\n\nreal" } });
+    });
+    await waitFor(() => expect(kv.get(DRAFT) ?? true).toBeTruthy());
+    // + New → a fresh blank memo becomes current; the "Kept" memo stays in the list
+    await act(async () => {
+      fireEvent.click(container.querySelector(".new-memo")!);
+    });
+    await waitFor(() => expect(container.querySelectorAll(".memo-list li").length).toBeGreaterThanOrEqual(2));
+    // open "Kept" so the fresh blank memo (still positive id, in freshIds) is NOT current
+    const keptLi = Array.from(container.querySelectorAll(".memo-list li")).find(
+      (el) => el.querySelector(".memo-title")?.textContent === "Kept"
+    )!;
+    await act(async () => {
+      fireEvent.click(keptLi); // leaveCurrent purges the blank fresh memo on leave
+    });
+    await waitFor(() =>
+      expect((container.querySelector("textarea.editor") as HTMLTextAreaElement)?.value).toContain("real")
+    );
+    expect(container.querySelector(".app")).toBeTruthy();
+  });
+});
+
+// ===========================================================================
+// save() un-acked retry path (lines 523-535, anon@526/527)
+// ===========================================================================
+describe("save un-acked 409 retry", () => {
+  it("re-bases and retries when a 409 is our own un-acked keepalive write", async () => {
+    authedBoot();
+    const row = server.seed({ title: "Unacked", content: "# Unacked\n\nv1" });
+    location.hash = "#" + row.id;
+    const { container } = render(<App />);
+    await waitFor(() =>
+      expect((container.querySelector("textarea.editor") as HTMLTextAreaElement)?.value).toContain("v1")
+    );
+    await waitFor(() => expect(kv.get(DRAFT + row.id)).toBeNull());
+
+    // Phase 1: a save whose response is "lost" (PUT rejects) → unacked.current set.
+    // The server still commits the write so its content matches the un-acked value.
+    const orig = server.fetchImpl;
+    const unackedValue = "# Unacked\n\nkeepalive write";
+    let phase: "lose" | "conflict" | "normal" = "lose";
+    globalThis.fetch = vi.fn(async (input: any, init: any) => {
+      const url = String(input);
+      const method = (init?.method || "GET").toUpperCase();
+      if (method === "PUT" && url.includes(`/memos/${row.id}`)) {
+        const body = init?.body ? JSON.parse(init.body) : {};
+        if (phase === "lose") {
+          // commit on the server but reject the response → unacked recorded
+          row.content = unackedValue;
+          row.updated_at = server.now() + 50;
+          throw new Error("response lost");
+        }
+        if (phase === "conflict") {
+          // first PUT of the next save 409s (stale base); after we re-base, succeed
+          if (body.base !== row.updated_at) {
+            return new Response("", { status: 409 });
+          }
+          row.content = body.content ?? "";
+          row.updated_at = server.now() + 50;
+          phase = "normal";
+          return new Response(
+            JSON.stringify({ title: "Unacked", updated_at: row.updated_at }),
+            { status: 200, headers: { "content-type": "application/json" } }
+          );
+        }
+      }
+      return orig(input, init);
+    }) as unknown as typeof fetch;
+
+    // Phase 1 edit → the debounced save's PUT rejects → unacked.current = { id, value }
+    // (input then a separate Cmd+S act so the content state propagates before save reads it)
+    const ta = container.querySelector("textarea.editor") as HTMLTextAreaElement;
+    await act(async () => {
+      fireEvent.input(ta, { target: { value: unackedValue } });
+    });
+    await act(async () => {
+      fireEvent.keyDown(window, { key: "s", metaKey: true });
+    });
+    await waitFor(() => expect(container.querySelector(".status.offline")).toBeTruthy());
+
+    // Phase 2: a new edit. The first PUT 409s (loadedAt is stale). save() sees the
+    // un-acked pending matches the server content → re-bases (anon@526/527 GET +
+    // json) and retries with the fresh base, which succeeds.
+    phase = "conflict";
+    const finalValue = "# Unacked\n\nresumed editing";
+    await act(async () => {
+      fireEvent.input(ta, { target: { value: finalValue } });
+    });
+    await act(async () => {
+      fireEvent.keyDown(window, { key: "s", metaKey: true });
+    });
+    await waitFor(() => expect(row.content).toBe(finalValue));
+    // the conflict banner was NOT raised — the 409 was recognised as our own write
+    expect(container.querySelector(".conflict")).toBeFalsy();
+  });
+
+  it("falls through to a real conflict when the re-base probe GET is not ok (x.ok ? : null false arm)", async () => {
+    authedBoot();
+    const row = server.seed({ title: "Unacked2", content: "# Unacked2\n\nv1" });
+    location.hash = "#" + row.id;
+    const { container } = render(<App />);
+    await waitFor(() =>
+      expect((container.querySelector("textarea.editor") as HTMLTextAreaElement)?.value).toContain("v1")
+    );
+    await waitFor(() => expect(kv.get(DRAFT + row.id)).toBeNull());
+
+    const orig = server.fetchImpl;
+    const unackedValue = "# Unacked2\n\nkeepalive write";
+    let phase: "lose" | "conflict" = "lose";
+    globalThis.fetch = vi.fn(async (input: any, init: any) => {
+      const url = String(input);
+      const method = (init?.method || "GET").toUpperCase();
+      if (method === "PUT" && url.includes(`/memos/${row.id}`)) {
+        if (phase === "lose") {
+          row.content = unackedValue;
+          row.updated_at = server.now() + 50;
+          throw new Error("response lost");
+        }
+        // every PUT 409s in the conflict phase (stale base, and the re-base never lands)
+        return new Response("", { status: 409 });
+      }
+      if (phase === "conflict" && method === "GET" && new RegExp(`/memos/${row.id}$`).test(url)) {
+        // the re-base probe GET returns NOT ok → `x.ok ? x.json() : null` → null →
+        // srv is null → no retry → the genuine conflict banner is raised
+        return new Response("", { status: 500 });
+      }
+      return orig(input, init);
+    }) as unknown as typeof fetch;
+
+    const ta = container.querySelector("textarea.editor") as HTMLTextAreaElement;
+    await act(async () => {
+      fireEvent.input(ta, { target: { value: unackedValue } });
+    });
+    await act(async () => {
+      fireEvent.keyDown(window, { key: "s", metaKey: true });
+    });
+    await waitFor(() => expect(container.querySelector(".status.offline")).toBeTruthy());
+
+    phase = "conflict";
+    await act(async () => {
+      fireEvent.input(ta, { target: { value: "# Unacked2\n\nmore edits" } });
+    });
+    await act(async () => {
+      fireEvent.keyDown(window, { key: "s", metaKey: true });
+    });
+    // probe GET not ok → srv null → falls through to the real conflict banner
+    await waitFor(() => expect(container.querySelector(".conflict")).toBeTruthy());
+  });
+
+  it("falls through to a real conflict when the re-base probe GET rejects (.catch(() => null))", async () => {
+    authedBoot();
+    const row = server.seed({ title: "Unacked3", content: "# Unacked3\n\nv1" });
+    location.hash = "#" + row.id;
+    const { container } = render(<App />);
+    await waitFor(() =>
+      expect((container.querySelector("textarea.editor") as HTMLTextAreaElement)?.value).toContain("v1")
+    );
+    await waitFor(() => expect(kv.get(DRAFT + row.id)).toBeNull());
+
+    const orig = server.fetchImpl;
+    const unackedValue = "# Unacked3\n\nkeepalive write";
+    let phase: "lose" | "conflict" = "lose";
+    globalThis.fetch = vi.fn(async (input: any, init: any) => {
+      const url = String(input);
+      const method = (init?.method || "GET").toUpperCase();
+      if (method === "PUT" && url.includes(`/memos/${row.id}`)) {
+        if (phase === "lose") {
+          row.content = unackedValue;
+          row.updated_at = server.now() + 50;
+          throw new Error("response lost");
+        }
+        return new Response("", { status: 409 });
+      }
+      if (phase === "conflict" && method === "GET" && new RegExp(`/memos/${row.id}$`).test(url)) {
+        // the re-base probe GET REJECTS → `.catch(() => null)` arm → srv null → no retry
+        throw new Error("probe offline");
+      }
+      return orig(input, init);
+    }) as unknown as typeof fetch;
+
+    const ta = container.querySelector("textarea.editor") as HTMLTextAreaElement;
+    await act(async () => {
+      fireEvent.input(ta, { target: { value: unackedValue } });
+    });
+    await act(async () => {
+      fireEvent.keyDown(window, { key: "s", metaKey: true });
+    });
+    await waitFor(() => expect(container.querySelector(".status.offline")).toBeTruthy());
+
+    phase = "conflict";
+    await act(async () => {
+      fireEvent.input(ta, { target: { value: "# Unacked3\n\nmore edits" } });
+    });
+    await act(async () => {
+      fireEvent.keyDown(window, { key: "s", metaKey: true });
+    });
+    // probe GET rejected → caught → srv null → falls through to the real conflict banner
+    await waitFor(() => expect(container.querySelector(".conflict")).toBeTruthy());
+  });
+});
+

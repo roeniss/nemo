@@ -2,7 +2,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, renderHook } from "@testing-library/preact";
 import { useToast, usePreview } from "../src/hooks";
-import { PREVIEW_DEBOUNCE, PREVIEW_MAX } from "../src/lib";
+import { PREVIEW_DEBOUNCE } from "../src/lib";
 
 afterEach(() => {
   cleanup();
@@ -78,10 +78,7 @@ describe("usePreview", () => {
 
   it("uses initial content as the initial src and renders sanitized html", () => {
     const { result } = renderHook(() => usePreview("**bold**"));
-    // src initialized to content immediately
-    expect(result.current.tooBig).toBe(false);
-    expect(result.current.size).toBe("**bold**".length);
-    // marked + DOMPurify pipeline runs: markdown emphasis becomes <strong>
+    // marked + DOMPurify pipeline runs immediately: markdown emphasis becomes <strong>
     expect(result.current.html).toContain("<strong>bold</strong>");
   });
 
@@ -96,44 +93,16 @@ describe("usePreview", () => {
       rerender({ content: "*two*" });
     });
 
-    // before debounce fires, src (and thus html/size) reflect old content
+    // before debounce fires, html still reflects the old content
     act(() => {
       vi.advanceTimersByTime(PREVIEW_DEBOUNCE - 1);
     });
-    expect(result.current.size).toBe("**one**".length);
     expect(result.current.html).toContain("<strong>one</strong>");
 
     act(() => {
       vi.advanceTimersByTime(1);
     });
-    expect(result.current.size).toBe("*two*".length);
     expect(result.current.html).toContain("<em>two</em>");
-  });
-
-  it("sets tooBig and empty html when content exceeds PREVIEW_MAX", () => {
-    const big = "a".repeat(PREVIEW_MAX + 1);
-    const { result } = renderHook(() => usePreview(big));
-    expect(result.current.tooBig).toBe(true);
-    expect(result.current.html).toBe("");
-    expect(result.current.size).toBe(big.length);
-  });
-
-  it("transitions from normal to tooBig after debounce", () => {
-    const big = "a".repeat(PREVIEW_MAX + 1);
-    const { result, rerender } = renderHook(
-      ({ content }) => usePreview(content),
-      { initialProps: { content: "small" } }
-    );
-    expect(result.current.tooBig).toBe(false);
-
-    act(() => {
-      rerender({ content: big });
-    });
-    act(() => {
-      vi.advanceTimersByTime(PREVIEW_DEBOUNCE);
-    });
-    expect(result.current.tooBig).toBe(true);
-    expect(result.current.html).toBe("");
   });
 
   it("cleanup on unmount before the timer fires does not throw", () => {

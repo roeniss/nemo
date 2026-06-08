@@ -12,7 +12,6 @@ export const LIST_CACHE = "qm-memos"; // cached server list for offline viewing 
 
 export const NEW_DOC = "# "; // every new memo opens with the title heading ready to type
 export const PREVIEW_DEBOUNCE = 200; // recompute the rendered preview this long after a keystroke
-export const PREVIEW_MAX = 200_000; // skip live preview above this size (too heavy to render per edit)
 export const SAVE_DEBOUNCE = 300; // save this long after the last keystroke (idle)
 export const SAVE_MAX_WAIT = 2000; // ...but at least this often during continuous typing
 

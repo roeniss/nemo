@@ -276,10 +276,6 @@ input {
   padding: 20px;
   overflow-y: auto;
 }
-.preview-skipped {
-  color: var(--fg-muted);
-  font-size: 13px;
-}
 
 .conflict {
   display: flex;

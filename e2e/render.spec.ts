@@ -12,13 +12,12 @@ test.describe("markdown rendering + sanitization", () => {
     await expect(preview.locator("li")).toHaveCount(2);
   });
 
-  test("skips the live preview for very large documents", async ({ page }) => {
+  test("still renders the preview for very large documents (no size cap)", async ({ page }) => {
     await blankMemo(page);
-    // ~250 KB of content (> PREVIEW_MAX 200 KB) → preview is skipped, not rendered
+    // ~250 KB of content — the old size cap would have skipped this; now it renders
     await page.fill(sel.editor, "# big\n\n" + "lorem ipsum ".repeat(22_000));
-    await expect(page.locator(".preview-skipped")).toBeVisible();
-    await expect(page.locator(".preview-skipped")).toContainText("미리보기 생략");
-    await expect(page.locator(".preview p")).toHaveCount(0); // nothing rendered
+    await expect(page.locator(".preview h1")).toHaveText("big");
+    await expect(page.locator(".preview p").first()).toBeVisible();
   });
 
   test("neutralizes XSS in memo content (DOMPurify)", async ({ page }) => {

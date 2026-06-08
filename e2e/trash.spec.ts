@@ -66,6 +66,69 @@ test.describe("trash", () => {
     }
   });
 
+  test("hiding from the read-only banner closes the view and removes it from Trash", async ({
+    page,
+    request,
+  }) => {
+    const title = uniq("TrashBH");
+    const id = await seedMemo(request, `# ${title}\n\nbanner hide body`);
+    try {
+      await page.goto("/");
+      await page.reload();
+      const row = page.locator(`${sel.list}:has(.memo-title:text-is("${title}"))`);
+      await expect(row).toBeVisible();
+      await row.locator(".del").click();
+      await expect(row).toHaveCount(0);
+
+      // open it read-only from Trash, then hide via the banner button (숨기기)
+      await page.click(trashTab);
+      const trashRow = page.locator(`${sel.list}:has(.memo-title:text-is("${title}"))`);
+      await trashRow.click();
+      await expect(page.locator(".conflict")).toContainText("읽기 전용");
+      await page.locator(".conflict button", { hasText: "숨기기" }).click();
+
+      // view closes and the row is gone — and stays gone after reloading Trash
+      await expect(page.locator(".conflict")).toHaveCount(0);
+      await expect(trashRow).toHaveCount(0);
+      await page.click(memosTab);
+      await page.click(trashTab);
+      await expect(page.locator(`.memo-title:text-is("${title}")`)).toHaveCount(0);
+    } finally {
+      await purge(request, id);
+    }
+  });
+
+  test("clicking a trashed memo restored elsewhere refreshes the list instead of opening it", async ({
+    page,
+    request,
+  }) => {
+    const title = uniq("TrashStale");
+    const id = await seedMemo(request, `# ${title}\n\nstale trash body`);
+    try {
+      await page.goto("/");
+      await page.reload();
+      const row = page.locator(`${sel.list}:has(.memo-title:text-is("${title}"))`);
+      await expect(row).toBeVisible();
+      await row.locator(".del").click();
+      await expect(row).toHaveCount(0);
+
+      await page.click(trashTab);
+      const trashRow = page.locator(`${sel.list}:has(.memo-title:text-is("${title}"))`);
+      await expect(trashRow).toBeVisible();
+
+      // another session restores it → the on-screen trash list is now stale
+      await request.post(`/api/memos/${id}/restore`);
+
+      // clicking the stale row: GET /api/trash/:id 404s → no read-only view opens,
+      // and loadTrash() refreshes the list so the gone row disappears
+      await trashRow.click();
+      await expect(page.locator(".conflict")).toHaveCount(0);
+      await expect(trashRow).toHaveCount(0);
+    } finally {
+      await purge(request, id);
+    }
+  });
+
   test("hide permanently removes a memo from the Trash view", async ({ page, request }) => {
     const title = uniq("TrashH");
     const id = await seedMemo(request, `# ${title}\n\nbody`);

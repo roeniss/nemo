@@ -2546,3 +2546,197 @@ describe("save un-acked 409 retry", () => {
   });
 });
 
+// ===========================================================================
+// COVERAGE FILL — remaining false-condition arms (implicit else)
+// ===========================================================================
+
+// line 176: the nav effect's INNER `if (location.hash)` false arm — currentId
+// transitions to null while location.hash is ALREADY empty (so no replaceState).
+describe("nav effect clears currentId with an already-empty hash (176 false arm)", () => {
+  it("discardDeleted nulls currentId after the hash was cleared — inner if is false", async () => {
+    authedBoot();
+    const row = server.seed({ title: "NavNull", content: "# NavNull\n\nbody" });
+    location.hash = "#" + row.id;
+    const { container } = render(<App />);
+    await waitFor(() =>
+      expect((container.querySelector("textarea.editor") as HTMLTextAreaElement)?.value).toContain("body")
+    );
+    // the open memo set the hash to its id (nav effect already ran once)
+    await waitFor(() => expect(location.hash).toBe("#" + row.id));
+
+    // raise the deleted-elsewhere banner via a 404 PUT
+    server.opts.putStatus = 404;
+    const ta = container.querySelector("textarea.editor") as HTMLTextAreaElement;
+    await act(async () => {
+      fireEvent.input(ta, { target: { value: "# NavNull\n\nbye now" } });
+    });
+    await waitFor(() => expect(container.querySelector(".conflict span")?.textContent).toContain("삭제"));
+
+    // clear the hash WITHOUT a hashchange (onHash no-ops on an empty hash anyway).
+    // discardDeleted is synchronous: setCurrentId(null) runs immediately, so the nav
+    // effect runs with location.hash === "" → the inner `if (location.hash)` is FALSE
+    // (no replaceState), exercising the implicit-else arm of line 176.
+    location.hash = "";
+    await act(async () => {
+      fireEvent.click(container.querySelectorAll(".conflict button")[1]); // 버리기 → discardDeleted
+    });
+    await waitFor(() => expect(container.querySelector(".center")).toBeTruthy());
+    expect(container.querySelector(".conflict")).toBeFalsy();
+    expect(location.hash).toBe("");
+  });
+});
+
+// line 395: deleteMemo's fresh-purge `if (currentId === id && timer.current)`
+// false arm — delete a FRESH real memo that has NO armed save timer.
+describe("deleteMemo a fresh real memo with no pending timer (395 false arm)", () => {
+  it("purges the boot's fresh blank current memo when no debounce is armed", async () => {
+    authedBoot();
+    const { container } = render(<App />);
+    // boot POSTs a fresh blank real memo (positive id, in freshIds) and opens it,
+    // but NOTHING has been typed → timer.current is null (no debounced save armed).
+    await waitFor(() => expect(container.querySelector("textarea.editor")).toBeTruthy());
+    await waitFor(() => expect(container.querySelector(".memo-list li")).toBeTruthy());
+
+    // delete the open fresh memo via its × → freshIds.has(id) true, but
+    // `currentId === id && timer.current` is FALSE (timer.current === null) →
+    // the clearTimeout block is skipped; the purge DELETE still fires.
+    const li = container.querySelector(".memo-list li") as HTMLElement;
+    await act(async () => {
+      fireEvent.click(li.querySelector(".del")!);
+    });
+    await waitFor(() => expect(container.querySelector(".center")).toBeTruthy());
+    await waitFor(() =>
+      expect(
+        server.fetchImpl.mock.calls.some(
+          ([u, i]) => String(u).includes("purge=1") && (i?.method || "").toUpperCase() === "DELETE"
+        )
+      ).toBe(true)
+    );
+    // fresh memos never go to trash → no undo toast
+    expect(container.querySelector(".toast")).toBeFalsy();
+  });
+});
+
+// line 567: save() success `if (id === currentIdRef.current)` false arm — a PUT
+// resolves for a memo that is no longer the open one (the user switched memos
+// before the PUT landed).
+describe("save resolves for a no-longer-current memo (567 false arm)", () => {
+  it("a gated PUT for memo A completes after switching to memo B", async () => {
+    authedBoot();
+    const a = server.seed({ title: "Aaa567", content: "# Aaa567\n\nalpha" });
+    const b = server.seed({ title: "Bbb567", content: "# Bbb567\n\nbeta" });
+    location.hash = "#" + a.id;
+    const { container } = render(<App />);
+    await waitFor(() =>
+      expect((container.querySelector("textarea.editor") as HTMLTextAreaElement)?.value).toContain("alpha")
+    );
+    await waitFor(() => expect(kv.get(DRAFT + a.id)).toBeNull());
+
+    // gate A's PUT so it stays in flight while we switch to B
+    let release: () => void = () => {};
+    const gate = new Promise<void>((r) => (release = r));
+    const orig = server.fetchImpl;
+    globalThis.fetch = vi.fn(async (input: any, init: any) => {
+      const url = String(input);
+      if ((init?.method || "GET").toUpperCase() === "PUT" && url.includes(`/memos/${a.id}`)) {
+        await gate; // hold A's save in flight
+      }
+      return orig(input, init);
+    }) as unknown as typeof fetch;
+
+    // edit A and force the save (Cmd+S) → A's PUT is now gated/in flight
+    const ta = container.querySelector("textarea.editor") as HTMLTextAreaElement;
+    await act(async () => {
+      fireEvent.input(ta, { target: { value: "# Aaa567\n\nalpha edited" } });
+    });
+    await act(async () => {
+      fireEvent.keyDown(window, { key: "s", metaKey: true });
+    });
+
+    // switch to B BEFORE A's PUT resolves → currentIdRef.current becomes B
+    const bLi = Array.from(container.querySelectorAll(".memo-list li")).find(
+      (el) => el.querySelector(".memo-title")?.textContent === "Bbb567"
+    )!;
+    await act(async () => {
+      fireEvent.click(bLi);
+    });
+    await waitFor(() =>
+      expect((container.querySelector("textarea.editor") as HTMLTextAreaElement)?.value).toContain("beta")
+    );
+
+    // release A's PUT → save() success runs with id === a.id but currentIdRef === b.id
+    // → `if (id === currentIdRef.current)` is FALSE (loadedAt/lastSaveAt for A skipped)
+    await act(async () => {
+      release();
+      await new Promise((r) => setTimeout(r, 20));
+    });
+    // A's edit still landed on the server; the editor stayed on B
+    await waitFor(() => expect(server.memos.find((m) => m.id === a.id)?.content).toContain("alpha edited"));
+    expect((container.querySelector("textarea.editor") as HTMLTextAreaElement).value).toContain("beta");
+  });
+});
+
+// line 711: background-sync reload `if (timer.current == null && currentIdRef.current === id)`
+// false arm — the user types DURING the per-memo reload GET so timer.current != null
+// when it resolves → the remote content is NOT adopted.
+describe("background sync reload aborts when the user types mid-fetch (711 false arm)", () => {
+  it("does not adopt remote content if a save timer is armed when the reload GET resolves", async () => {
+    authedBoot();
+    const row = server.seed({ title: "Sync711", content: "# Sync711\n\nv1" });
+    location.hash = "#" + row.id;
+    const { container } = render(<App />);
+    await waitFor(() =>
+      expect((container.querySelector("textarea.editor") as HTMLTextAreaElement)?.value).toContain("v1")
+    );
+    // settle: no pending draft, so the sync guard reaches the reload block
+    await waitFor(() => expect(kv.get(DRAFT + row.id)).toBeNull());
+
+    const ta = container.querySelector("textarea.editor") as HTMLTextAreaElement;
+
+    // gate the per-memo reload GET (/api/memos/:id). While it's gated, we type into
+    // the editor so onEdit arms timer.current; then release the GET so the
+    // `timer.current == null` check is FALSE → remote content is NOT setContent'd.
+    let release: () => void = () => {};
+    const gate = new Promise<void>((r) => (release = r));
+    let gateArmed = true;
+    const orig = server.fetchImpl;
+    globalThis.fetch = vi.fn(async (input: any, init: any) => {
+      const url = String(input);
+      const method = (init?.method || "GET").toUpperCase();
+      if (gateArmed && method === "GET" && new RegExp(`/memos/${row.id}$`).test(url)) {
+        gateArmed = false; // only gate the first reload GET
+        await gate;
+      }
+      return orig(input, init);
+    }) as unknown as typeof fetch;
+
+    // the memo changed elsewhere (newer updated_at) so sync's `cur.updated_at > loadedAt`
+    // is true and it issues the (now-gated) per-memo reload GET
+    row.content = "# Sync711\n\nv2 remote";
+    row.updated_at = server.now() + 100000;
+    await act(async () => {
+      window.dispatchEvent(new Event("focus"));
+    });
+    // give sync time to reach the gated reload GET
+    await new Promise((r) => setTimeout(r, 20));
+
+    // type while the reload GET is gated → onEdit arms timer.current (no debounce
+    // fires within this window: SAVE_DEBOUNCE is 300ms, we release immediately)
+    await act(async () => {
+      fireEvent.input(ta, { target: { value: "# Sync711\n\nmy local edit" } });
+    });
+
+    // release the reload GET → it resolves with timer.current != null → 711 FALSE arm
+    await act(async () => {
+      release();
+      await new Promise((r) => setTimeout(r, 10));
+    });
+
+    // the remote "v2 remote" was NOT adopted — the user's in-progress edit stands
+    expect((container.querySelector("textarea.editor") as HTMLTextAreaElement).value).toContain("my local edit");
+    expect((container.querySelector("textarea.editor") as HTMLTextAreaElement).value).not.toContain("v2 remote");
+    // clean up the armed save timer so it doesn't bleed into the next test
+    await waitFor(() => expect(kv.get(DRAFT + row.id)).toBeNull(), { timeout: 3000 });
+  });
+});
+

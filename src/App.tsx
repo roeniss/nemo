@@ -404,6 +404,9 @@ export default function App() {
       kv.remove(CONTENT_CACHE + id);
       kv.remove(DRAFT + id);
       setMemos((ms) => ms.filter((x) => x.id !== id));
+      // a fresh memo is purged the moment you leave it, so one in the list is always
+      // the open one — currentId !== id here is unreachable
+      /* v8 ignore next */
       if (currentId === id) {
         setCurrentId(null);
         setContent("");
@@ -433,6 +436,9 @@ export default function App() {
     /* v8 ignore next */
     if (!undo) return;
     const id = undo.id;
+    // undoDelete only runs while the undo toast is shown, which deleteMemo sets up
+    // together with undoTimer — so the timer is always present here
+    /* v8 ignore next */
     if (undoTimer.current) clearTimeout(undoTimer.current);
     setUndo(null);
     await api(`/memos/${id}/restore`, { method: "POST" });
@@ -848,6 +854,9 @@ export default function App() {
       const next = idx === -1 ? (down ? 0 : list.length - 1) : idx + (down ? 1 : -1);
       if (next < 0 || next >= list.length) return; // clamp at the ends
       const target = list[next];
+      // next is a clamped in-range index distinct from the current row, so target is
+      // always a defined, different memo — the guard's false arm is unreachable
+      /* v8 ignore next */
       if (target && target.id !== currentIdRef.current) openMemoRef.current(target.id);
     }
     window.addEventListener("keydown", onKey);

@@ -205,6 +205,39 @@ describe("Login Turnstile", () => {
     expect(JSON.parse((loginCall[1] as RequestInit).body as string).turnstileToken).toBe("tok-123");
   });
 
+  it("short-circuits renderWidget on a second onload when the widget already has a child (1142 false arm)", async () => {
+    // window.turnstile is NOT defined at mount → the effect wires __cfTurnstileOnload
+    // and we drive it manually. render() appends a child node to the widget so a
+    // SECOND onload call sees hasChildNodes() === true → the `!hasChildNodes()`
+    // condition is FALSE and render is not called again.
+    const render2 = vi.fn((el: HTMLElement) => {
+      el.appendChild(document.createElement("iframe")); // CF normally injects an iframe
+    });
+    // turnstile is NOT defined at mount → the effect wires __cfTurnstileOnload and
+    // returns (no immediate render). We define turnstile, then drive onload twice.
+    const App = await importApp();
+    const { container } = render(<App />);
+    await waitFor(() => expect(container.querySelector(".login")).toBeTruthy());
+    await waitFor(() => expect(typeof window.__cfTurnstileOnload).toBe("function"));
+    (window as any).turnstile = { render: render2, reset: vi.fn() };
+
+    const widgetEl = container.querySelector(".turnstile") as HTMLElement;
+
+    // first onload → renderWidget: turnstile + widget + !hasChildNodes() all true → render
+    await act(async () => {
+      window.__cfTurnstileOnload!();
+    });
+    expect(render2).toHaveBeenCalledTimes(1);
+    expect(widgetEl.hasChildNodes()).toBe(true);
+
+    // second onload → widget.current.hasChildNodes() is now true → the
+    // `&& !widget.current.hasChildNodes()` arm is FALSE → no second render call
+    await act(async () => {
+      window.__cfTurnstileOnload!();
+    });
+    expect(render2).toHaveBeenCalledTimes(1); // unchanged → false arm exercised
+  });
+
   it("returns early (no reset) on a successful login", async () => {
     const reset = vi.fn();
     let captured: ((t: string) => void) | undefined;

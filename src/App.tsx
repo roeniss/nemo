@@ -843,6 +843,10 @@ export default function App() {
   // debounced live markdown preview — renders the editor content, or the read-only
   // trash memo when one is open (the editor is hidden in that case)
   const { html } = usePreview(viewing ? viewing.content : content);
+  // the preview is debounced, so a burst of typing grows the editor (and fires
+  // its scroll) while the rendered html — and thus the preview's height — is
+  // still stale. Re-align once the new html lands, or the preview trails behind.
+  useEffect(syncPreviewScroll, [html]);
   const visibleMemos = useMemo(() => {
     const q = query.trim().toLowerCase();
     return q ? memos.filter((m) => m.title.toLowerCase().includes(q)) : memos;

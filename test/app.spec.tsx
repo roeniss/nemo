@@ -2797,5 +2797,26 @@ describe("preview scroll sync", () => {
     });
     expect(pv.scrollTop).toBe(7); // untouched
   });
+
+  it("re-aligns after the debounced re-render so the preview doesn't trail behind", async () => {
+    const { ta, pv } = await openEditor();
+    // editor pinned to the bottom; preview is still short (debounced/stale).
+    fakeMetrics(ta, 1000, 500); // edMax = 500
+    fakeMetrics(pv, 600, 500); // pvMax = 100
+    ta.scrollTop = 500; // bottom of the editor
+    await act(async () => {
+      fireEvent.scroll(ta);
+    });
+    expect(pv.scrollTop).toBe(100); // synced against the stale (short) preview
+
+    // a burst of typing lands; the rendered preview grows taller. The scroll
+    // already fired against the old height, so only the html-change re-sync
+    // can pull the preview back down to the new bottom.
+    fakeMetrics(pv, 2500, 500); // pvMax now 2000
+    await act(async () => {
+      fireEvent.input(ta, { target: { value: "# Scroll\n\nbody\n\n" + "x\n".repeat(50) } });
+    });
+    await waitFor(() => expect(pv.scrollTop).toBe(2000)); // (500/500) * 2000 → new bottom
+  });
 });
 

@@ -98,6 +98,19 @@ export default function App() {
   const currentIdRef = useRef(currentId);
   currentIdRef.current = currentId;
   const editorRef = useRef<HTMLTextAreaElement>(null);
+  const previewRef = useRef<HTMLDivElement>(null);
+  // keep the desktop preview scrolled to match the editor, so typing past the
+  // fold doesn't leave the rendered text stranded out of view (desktop only —
+  // the preview is hidden on mobile, where this is a no-op).
+  function syncPreviewScroll() {
+    const ed = editorRef.current;
+    const pv = previewRef.current;
+    if (!ed || !pv) return;
+    const edMax = ed.scrollHeight - ed.clientHeight;
+    const pvMax = pv.scrollHeight - pv.clientHeight;
+    if (edMax <= 0 || pvMax <= 0) return;
+    pv.scrollTop = (ed.scrollTop / edMax) * pvMax;
+  }
   const focusOnOpen = useRef(false); // focus the editor after the next new memo opens
   const fileRef = useRef<HTMLInputElement>(null); // hidden file picker for text import
   const folderRef = useRef<HTMLInputElement>(null); // hidden folder picker (each file → a memo)
@@ -1094,6 +1107,7 @@ export default function App() {
               className="editor"
               value={content}
               onChange={(e) => onEdit(e.currentTarget.value)}
+              onScroll={syncPreviewScroll}
               onPaste={(e) => {
                 // a pasted image is embedded inline as base64; everything else
                 // falls through to the normal text paste
@@ -1112,7 +1126,11 @@ export default function App() {
               placeholder="# Title&#10;&#10;Write in markdown…  (drop a file for a new memo · paste an image to embed)"
               spellcheck={false}
             />
-            <div className="preview markdown" dangerouslySetInnerHTML={{ __html: html }} />
+            <div
+              ref={previewRef}
+              className="preview markdown"
+              dangerouslySetInnerHTML={{ __html: html }}
+            />
           </div>
         )}
       </div>

@@ -2740,3 +2740,62 @@ describe("background sync reload aborts when the user types mid-fetch (711 false
   });
 });
 
+// ===========================================================================
+// PREVIEW SCROLL SYNC (desktop): the rendered pane follows the editor so
+// typing past the fold doesn't strand the preview out of view.
+// ===========================================================================
+describe("preview scroll sync", () => {
+  // happy-dom doesn't lay out, so scroll/clientHeight are 0 — fake them.
+  function fakeMetrics(el: HTMLElement, scrollHeight: number, clientHeight: number) {
+    Object.defineProperty(el, "scrollHeight", { value: scrollHeight, configurable: true });
+    Object.defineProperty(el, "clientHeight", { value: clientHeight, configurable: true });
+  }
+
+  async function openEditor() {
+    authedBoot();
+    const row = server.seed({ title: "Scroll", content: "# Scroll\n\nbody" });
+    location.hash = "#" + row.id;
+    const { container } = render(<App />);
+    await waitFor(() =>
+      expect((container.querySelector("textarea.editor") as HTMLTextAreaElement)?.value).toContain("body")
+    );
+    const ta = container.querySelector("textarea.editor") as HTMLTextAreaElement;
+    const pv = container.querySelector(".preview") as HTMLDivElement;
+    return { ta, pv };
+  }
+
+  it("scrolls the preview proportionally when the editor scrolls", async () => {
+    const { ta, pv } = await openEditor();
+    fakeMetrics(ta, 1000, 500); // edMax = 500
+    fakeMetrics(pv, 2000, 500); // pvMax = 1500
+    ta.scrollTop = 250; // halfway down the editor
+    await act(async () => {
+      fireEvent.scroll(ta);
+    });
+    expect(pv.scrollTop).toBe(750); // (250 / 500) * 1500
+  });
+
+  it("does nothing when the editor has no overflow (edMax <= 0)", async () => {
+    const { ta, pv } = await openEditor();
+    fakeMetrics(ta, 500, 500); // edMax = 0
+    fakeMetrics(pv, 2000, 500);
+    pv.scrollTop = 42;
+    await act(async () => {
+      fireEvent.scroll(ta);
+    });
+    expect(pv.scrollTop).toBe(42); // untouched
+  });
+
+  it("does nothing when the preview has no overflow (pvMax <= 0)", async () => {
+    const { ta, pv } = await openEditor();
+    fakeMetrics(ta, 1000, 500); // edMax = 500
+    fakeMetrics(pv, 500, 500); // pvMax = 0
+    ta.scrollTop = 250;
+    pv.scrollTop = 7;
+    await act(async () => {
+      fireEvent.scroll(ta);
+    });
+    expect(pv.scrollTop).toBe(7); // untouched
+  });
+});
+

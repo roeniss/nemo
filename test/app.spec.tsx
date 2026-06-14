@@ -531,6 +531,65 @@ describe("delete and undo", () => {
       expect(titles).toContain("Doomed");
     });
   });
+
+  // seed A,B,C in order → later seeds sort higher (byRecent), so the visible list
+  // is [C, B, A]. Deleting the open memo should advance to its neighbour.
+  function openRow(container: HTMLElement, title: string) {
+    const li = Array.from(container.querySelectorAll(".memo-list li")).find(
+      (el) => el.querySelector(".memo-title")?.textContent === title
+    ) as HTMLElement;
+    return act(async () => {
+      fireEvent.click(li);
+    });
+  }
+  function delRow(container: HTMLElement, title: string) {
+    const li = Array.from(container.querySelectorAll(".memo-list li")).find(
+      (el) => el.querySelector(".memo-title")?.textContent === title
+    ) as HTMLElement;
+    return act(async () => {
+      fireEvent.click(li.querySelector(".del")!);
+    });
+  }
+
+  it("opens the memo right below when the open memo is deleted", async () => {
+    authedBoot();
+    server.seed({ title: "A", content: "# A\n\naaa" });
+    server.seed({ title: "B", content: "# B\n\nbbb" });
+    server.seed({ title: "C", content: "# C\n\nccc" });
+    const { container } = render(<App />);
+    await waitFor(() => expect(container.querySelectorAll(".memo-list li").length).toBe(3));
+
+    // list is [C, B, A]; open the middle one and delete it → below = A
+    await openRow(container as unknown as HTMLElement, "B");
+    await waitFor(() =>
+      expect((container.querySelector("textarea.editor") as HTMLTextAreaElement)?.value).toContain("bbb")
+    );
+    await delRow(container as unknown as HTMLElement, "B");
+    await waitFor(() =>
+      expect((container.querySelector("textarea.editor") as HTMLTextAreaElement)?.value).toContain("aaa")
+    );
+    expect(container.querySelector(".memo-list li.active .memo-title")?.textContent).toBe("A");
+  });
+
+  it("opens the memo above when the deleted open memo has none below it", async () => {
+    authedBoot();
+    server.seed({ title: "A", content: "# A\n\naaa" });
+    server.seed({ title: "B", content: "# B\n\nbbb" });
+    server.seed({ title: "C", content: "# C\n\nccc" });
+    const { container } = render(<App />);
+    await waitFor(() => expect(container.querySelectorAll(".memo-list li").length).toBe(3));
+
+    // list is [C, B, A]; open the last one (no row below) and delete it → above = B
+    await openRow(container as unknown as HTMLElement, "A");
+    await waitFor(() =>
+      expect((container.querySelector("textarea.editor") as HTMLTextAreaElement)?.value).toContain("aaa")
+    );
+    await delRow(container as unknown as HTMLElement, "A");
+    await waitFor(() =>
+      expect((container.querySelector("textarea.editor") as HTMLTextAreaElement)?.value).toContain("bbb")
+    );
+    expect(container.querySelector(".memo-list li.active .memo-title")?.textContent).toBe("B");
+  });
 });
 
 // ===========================================================================

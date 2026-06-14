@@ -293,6 +293,15 @@ export default function App() {
   async function openMemo(id: number) {
     if (id === currentIdRef.current) return; // already open — re-clicking it is a no-op (and would purge a fresh-blank current memo via leaveCurrent)
     await leaveCurrent();
+    await loadMemo(id);
+  }
+  openMemoRef.current = openMemo;
+
+  // Load a memo into the editor WITHOUT leaving the current one. openMemo runs
+  // leaveCurrent first (flush/purge the memo being left); deleteMemo reuses this
+  // directly to open a neighbour, where the memo being "left" is the one we just
+  // deleted — there is nothing to flush or purge.
+  async function loadMemo(id: number) {
     setViewing(null); // leaving any read-only trash view
     conflictRef.current = false;
     setConflict(false);
@@ -333,7 +342,6 @@ export default function App() {
       setOffline(true); // offline — keep the instantly-shown local content
     }
   }
-  openMemoRef.current = openMemo;
 
   async function newMemo() {
     await leaveCurrent();
@@ -401,6 +409,22 @@ export default function App() {
     }
   }
 
+  // After deleting the currently-open memo, open the memo right below it in the
+  // visible list; if there is none below, the one right above; if the list is now
+  // empty, fall back to the empty-centre placeholder. visibleMemosRef still holds
+  // the to-be-deleted row here (setMemos is async), so its neighbours are intact.
+  function openNeighbourOrClear(id: number) {
+    const list = visibleMemosRef.current;
+    const idx = list.findIndex((x) => x.id === id);
+    const next = idx === -1 ? undefined : list[idx + 1] ?? list[idx - 1];
+    if (next) {
+      loadMemo(next.id);
+    } else {
+      setCurrentId(null);
+      setContent("");
+    }
+  }
+
   async function deleteMemo(id: number) {
     const m = memos.find((x) => x.id === id);
     if (id < 0) {
@@ -409,8 +433,7 @@ export default function App() {
       kv.remove(DRAFT + id);
       setMemos((ms) => ms.filter((x) => x.id !== id));
       if (currentId === id) {
-        setCurrentId(null);
-        setContent("");
+        openNeighbourOrClear(id);
       }
       return;
     }
@@ -434,8 +457,7 @@ export default function App() {
       // the open one — currentId !== id here is unreachable
       /* v8 ignore next */
       if (currentId === id) {
-        setCurrentId(null);
-        setContent("");
+        openNeighbourOrClear(id);
       }
       return;
     }
@@ -448,8 +470,7 @@ export default function App() {
     kv.remove(DRAFT + id);
     setMemos((ms) => ms.filter((x) => x.id !== id));
     if (currentId === id) {
-      setCurrentId(null);
-      setContent("");
+      openNeighbourOrClear(id);
     }
     setUndo({ id, title: m?.title || "Untitled" });
     if (undoTimer.current) clearTimeout(undoTimer.current);

@@ -20,6 +20,8 @@ import {
   byRecent,
   caretLine,
   centerDelta,
+  keywordOf,
+  keywordsOf,
 } from "./lib";
 import { useToast, usePreview } from "./hooks";
 import { useImport } from "./useImport";
@@ -56,6 +58,7 @@ export default function App() {
   const [view, setView] = useState<"memos" | "trash">("memos");
   const [viewing, setViewing] = useState<Memo | null>(null); // trashed memo open in read-only view
   const [query, setQuery] = useState("");
+  const [keyword, setKeyword] = useState<string | null>(null); // selected filter badge
   const [undo, setUndo] = useState<{ id: number; title: string } | null>(null);
   const undoTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const loadedAt = useRef(0); // updated_at of the currently open memo (for sync)
@@ -857,10 +860,20 @@ export default function App() {
   // data-source-line blocks) lands, the caret has usually moved on. Re-center on
   // every render so the preview catches up to where the caret now is.
   useEffect(syncPreviewToCaret, [html]);
-  const visibleMemos = useMemo(() => {
+  // memos surviving the search text — also the population the badge bar is built
+  // from, so every keyword stays visible/clickable even once one is selected.
+  const searchMatched = useMemo(() => {
     const q = query.trim().toLowerCase();
     return q ? memos.filter((m) => m.title.toLowerCase().includes(q)) : memos;
   }, [memos, query]);
+  const badges = useMemo(() => keywordsOf(searchMatched), [searchMatched]);
+  // ignore a selected badge that the current search has filtered away, so the
+  // list never dead-ends to empty; the badge re-applies if the search widens.
+  const activeKeyword = keyword && badges.includes(keyword) ? keyword : null;
+  const visibleMemos = useMemo(
+    () => (activeKeyword ? searchMatched.filter((m) => keywordOf(m.title) === activeKeyword) : searchMatched),
+    [searchMatched, activeKeyword]
+  );
   const visibleMemosRef = useRef(visibleMemos);
   visibleMemosRef.current = visibleMemos;
 
@@ -931,6 +944,19 @@ export default function App() {
                 value={query}
                 onChange={(e) => setQuery(e.currentTarget.value)}
               />
+              {badges.length > 0 && (
+                <div className="badges">
+                  {badges.map((k) => (
+                    <button
+                      key={k}
+                      className={k === activeKeyword ? "badge active" : "badge"}
+                      onClick={() => setKeyword((cur) => (cur === k ? null : k))}
+                    >
+                      {k}
+                    </button>
+                  ))}
+                </div>
+              )}
               <ul className="memo-list">
                 {visibleMemos.map((m) => (
                   <li

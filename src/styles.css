@@ -160,6 +160,31 @@ input {
   border: 1px solid var(--border-strong);
   border-radius: 4px;
 }
+.badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 0 8px 8px;
+}
+.badge {
+  padding: 2px 8px;
+  font-size: 12px;
+  line-height: 1.5;
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  background: var(--btn-bg);
+  color: var(--fg-muted);
+  cursor: pointer;
+}
+.badge:hover {
+  color: var(--fg);
+}
+.badge.active {
+  background: var(--accent);
+  color: var(--accent-fg);
+  border-color: var(--accent);
+}
+
 .restore {
   border: none;
   background: transparent;

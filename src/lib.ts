@@ -27,6 +27,24 @@ export function titleFrom(content: string): string {
   return line.replace(/^#+\s*/, "").trim().slice(0, 120) || "Untitled";
 }
 
+// the filter-badge keyword for a title: its first word, lowercased. A "word" is
+// the first run of letters/digits in any script (Korean, Latin, …); spaces,
+// hyphens, underscores and other punctuation delimit it. "" when the title has
+// no word characters at all (those memos get no badge).
+//   "todo - 피아노 고르기"                 -> "todo"
+//   "learning-rosetta-only-x86-to-arm.md" -> "learning"
+//   "이희승 발표 - is java alive or dead"  -> "이희승"
+export const keywordOf = (title: string): string =>
+  title.match(/[\p{L}\p{N}]+/u)?.[0].toLowerCase() ?? "";
+
+// distinct keywords across the given memos, alphabetically sorted (locale-aware
+// so Korean and Latin interleave sensibly). Drives the badge bar. The
+// "untitled" placeholder (blank/new memos) is excluded — it isn't a real tag.
+export const keywordsOf = (memos: MemoMeta[]): string[] =>
+  [...new Set(memos.map((m) => keywordOf(m.title)))]
+    .filter((k) => k && k !== "untitled")
+    .sort((a, b) => a.localeCompare(b));
+
 // a memo holding only a heading marker (the "# " we prefill) counts as empty,
 // so an untouched new memo is still auto-purged on leave
 export const isBlank = (content: string) => content.replace(/^#+\s*/, "").trim() === "";

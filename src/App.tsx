@@ -18,7 +18,6 @@ import {
   readList,
   writeList,
   byRecent,
-  caretLine,
   centerDelta,
   keywordOf,
   keywordsOf,
@@ -26,6 +25,7 @@ import {
 import { useToast, usePreview } from "./hooks";
 import { Settings } from "./Settings";
 import { useImport } from "./useImport";
+import Editor, { type EditorHandle } from "./Editor";
 
 // public site key (build-time). Empty = widget dormant until keys are configured.
 const TURNSTILE_SITEKEY = import.meta.env.VITE_TURNSTILE_SITEKEY || "";
@@ -103,7 +103,7 @@ export default function App() {
   contentRef.current = content;
   const currentIdRef = useRef(currentId);
   currentIdRef.current = currentId;
-  const editorRef = useRef<HTMLTextAreaElement>(null);
+  const editorRef = useRef<EditorHandle>(null);
   const previewRef = useRef<HTMLDivElement>(null);
   // Scroll the desktop preview so the rendered block under the editor caret is
   // vertically centered — the preview then follows wherever you're typing,
@@ -115,7 +115,7 @@ export default function App() {
     const ed = editorRef.current;
     const pv = previewRef.current;
     if (!ed || !pv) return;
-    const line = caretLine(ed.value, ed.selectionStart);
+    const line = ed.getCaretLine();
     let target: HTMLElement | null = null;
     for (const el of pv.querySelectorAll<HTMLElement>("[data-source-line]")) {
       if (Number(el.dataset.sourceLine) <= line) target = el;
@@ -140,11 +140,18 @@ export default function App() {
 
   // background auth check + list — UI is already on screen; this fills it in
   useEffect(() => {
+    // the boot chain is fire-and-forget; if the component unmounts before it
+    // settles (e.g. a test tears down), bail so we don't touch state or read
+    // `location` (hashId) after the env is gone — which would otherwise surface
+    // as an unhandled rejection
+    let cancelled = false;
     const temps = readList(TEMPS_KEY);
     // load the IndexedDB content mirror before anything reads drafts/cache
     hydrate()
       .then(() => api("/memos"))
       .then(async (r) => {
+        /* v8 ignore next */
+        if (cancelled) return;
         if (r.status === 401) {
           localStorage.removeItem("qm-authed");
           setAuthed(false);
@@ -166,6 +173,8 @@ export default function App() {
         else newMemo();
       })
       .catch(() => {
+        /* v8 ignore next */
+        if (cancelled) return;
         // offline — render cached list + local temps so the app is usable
         const merged = [...temps, ...readList(LIST_CACHE)].sort(byRecent);
         setMemos(merged);
@@ -185,6 +194,9 @@ export default function App() {
           newMemo(); // creates a local temp while offline
         }
       });
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   // reflect the open memo in the URL so each memo is its own page (bookmarkable,
@@ -220,9 +232,7 @@ export default function App() {
   useEffect(() => {
     if (focusOnOpen.current && editorRef.current) {
       focusOnOpen.current = false;
-      const el = editorRef.current;
-      el.focus();
-      el.setSelectionRange(el.value.length, el.value.length);
+      editorRef.current.focusEnd();
     }
   }, [currentId]);
 
@@ -1177,29 +1187,24 @@ export default function App() {
           </div>
         ) : (
           <div className="pane">
-            <textarea
+            <Editor
               ref={editorRef}
-              className="editor"
+              className="editor-cm"
               value={content}
-              onChange={(e) => onEdit(e.currentTarget.value)}
-              onSelect={syncPreviewToCaret}
+              onChange={onEdit}
+              onCaret={syncPreviewToCaret}
               onPaste={(e) => {
-                // a pasted image is embedded inline as base64; everything else
-                // falls through to the normal text paste
+                // a pasted image is embedded inline as base64; preventDefault then
+                // stops CM's text paste. Everything else falls through to CM.
                 if (pasteImage(e.clipboardData)) e.preventDefault();
-              }}
-              onDragOver={(e) => {
-                if (e.dataTransfer?.types?.includes("Files")) e.preventDefault(); // allow drop
               }}
               onDrop={(e) => {
                 const files = e.dataTransfer?.files;
                 if (files && files.length) {
-                  e.preventDefault(); // don't let the browser navigate to the file
+                  e.preventDefault(); // stop CM's drop + browser navigation
                   importFile(files); // each dropped file → its own new memo
                 }
               }}
-              placeholder="# Title&#10;&#10;Write in markdown…  (drop a file for a new memo · paste an image to embed)"
-              spellcheck={false}
             />
             <div
               ref={previewRef}

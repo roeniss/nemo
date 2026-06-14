@@ -4,7 +4,6 @@ import { render, fireEvent, waitFor, cleanup, act } from "@testing-library/preac
 import App from "../src/App";
 import { kv, hydrate } from "../src/idb";
 import { DRAFT, CONTENT_CACHE, TEMPS_KEY, LIST_CACHE } from "../src/lib";
-import { editorEl, editorValue, setEditor } from "./cm";
 
 // ---------------------------------------------------------------------------
 // In-memory fake server keyed by url + method, with per-endpoint toggles that
@@ -206,7 +205,7 @@ describe("openMemo revalidate", () => {
     const { container } = render(<App />);
     // the instantly-shown content is the draft, and revalidate pushes it to server
     await waitFor(() =>
-      expect(editorValue(container)).toContain("LOCAL unsynced edit")
+      expect((container.querySelector("textarea.editor") as HTMLTextAreaElement)?.value).toContain("LOCAL unsynced edit")
     );
     await waitFor(() => expect(server.memos.find((m) => m.id === row.id)?.content).toContain("LOCAL unsynced edit"));
     // draft cleared after the successful save
@@ -224,9 +223,9 @@ describe("openMemo revalidate", () => {
     localStorage.setItem(LIST_CACHE, JSON.stringify([{ id: row.id, title: "Adopt", updated_at: 1 }]));
     location.hash = "#" + row.id;
     const { container } = render(<App />);
-    await waitFor(() => expect(editorEl(container)).toBeTruthy());
+    await waitFor(() => expect(container.querySelector("textarea.editor")).toBeTruthy());
     await waitFor(() =>
-      expect(editorValue(container)).toContain("NEW server body")
+      expect((container.querySelector("textarea.editor") as HTMLTextAreaElement)?.value).toContain("NEW server body")
     );
   });
 
@@ -248,7 +247,7 @@ describe("openMemo revalidate", () => {
       window.dispatchEvent(new HashChangeEvent("hashchange"));
     });
     await waitFor(() =>
-      expect(editorValue(container)).toContain("local only")
+      expect((container.querySelector("textarea.editor") as HTMLTextAreaElement)?.value).toContain("local only")
     );
   });
 
@@ -273,14 +272,14 @@ describe("openMemo revalidate", () => {
 
     location.hash = "#" + a.id;
     const { container } = render(<App />);
-    await waitFor(() => expect(editorEl(container)).toBeTruthy());
+    await waitFor(() => expect(container.querySelector("textarea.editor")).toBeTruthy());
     // move to b while a's revalidate is still gated → currentIdRef.current !== a.id
     await act(async () => {
       location.hash = "#" + b.id;
       window.dispatchEvent(new HashChangeEvent("hashchange"));
     });
     await waitFor(() =>
-      expect(editorValue(container)).toContain("beta")
+      expect((container.querySelector("textarea.editor") as HTMLTextAreaElement)?.value).toContain("beta")
     );
     // now release a's revalidate — it must early-return (currentId is b), not clobber b
     await act(async () => {
@@ -288,7 +287,7 @@ describe("openMemo revalidate", () => {
       await Promise.resolve();
     });
     await new Promise((r) => setTimeout(r, 20));
-    expect(editorValue(container)).toContain("beta");
+    expect((container.querySelector("textarea.editor") as HTMLTextAreaElement).value).toContain("beta");
   });
 
   it("sets offline when the per-memo revalidate fetch rejects", async () => {
@@ -305,7 +304,7 @@ describe("openMemo revalidate", () => {
     });
     await waitFor(() => expect(container.querySelector(".status.offline")).toBeTruthy());
     // local content is still shown
-    expect(editorValue(container)).toContain("cached body");
+    expect((container.querySelector("textarea.editor") as HTMLTextAreaElement).value).toContain("cached body");
   });
 });
 
@@ -319,11 +318,12 @@ describe("save network failure and serialization", () => {
     const row = server.seed({ title: "Fail", content: "# Fail" });
     location.hash = "#" + row.id;
     const { container } = render(<App />);
-    await vi.waitFor(() => expect(editorEl(container)).toBeTruthy());
+    await vi.waitFor(() => expect(container.querySelector("textarea.editor")).toBeTruthy());
 
     server.opts.putThrows = true;
+    const ta = container.querySelector("textarea.editor") as HTMLTextAreaElement;
     await act(async () => {
-      setEditor(container, "# Fail\n\nwill not reach server");
+      fireEvent.input(ta, { target: { value: "# Fail\n\nwill not reach server" } });
     });
     await act(async () => {
       await vi.advanceTimersByTimeAsync(2500);
@@ -339,7 +339,8 @@ describe("save network failure and serialization", () => {
     const row = server.seed({ title: "Queue", content: "# Queue" });
     location.hash = "#" + row.id;
     const { container } = render(<App />);
-    await waitFor(() => expect(editorEl(container)).toBeTruthy());
+    await waitFor(() => expect(container.querySelector("textarea.editor")).toBeTruthy());
+    const ta = container.querySelector("textarea.editor") as HTMLTextAreaElement;
 
     // hold the first PUT in flight so the second save queues behind it (pendingSave).
     // Count PUTs so we can confirm a second one drained after the gate opens.
@@ -352,7 +353,7 @@ describe("save network failure and serialization", () => {
 
     // first edit, then Cmd+S → save() goes in-flight and blocks on the gate
     await act(async () => {
-      setEditor(container, "# Queue\n\nfirst");
+      fireEvent.input(ta, { target: { value: "# Queue\n\nfirst" } });
     });
     await act(async () => {
       fireEvent.keyDown(window, { key: "s", metaKey: true });
@@ -363,7 +364,7 @@ describe("save network failure and serialization", () => {
     // second edit (fresh render committed) then Cmd+S while the first is gated →
     // inFlight.current is true → this save queues into pendingSave
     await act(async () => {
-      setEditor(container, "# Queue\n\nsecond drained");
+      fireEvent.input(ta, { target: { value: "# Queue\n\nsecond drained" } });
     });
     await act(async () => {
       fireEvent.keyDown(window, { key: "s", metaKey: true });
@@ -389,11 +390,12 @@ describe("recover", () => {
     const row = server.seed({ title: "Conf", content: "# Conf" });
     location.hash = "#" + row.id;
     const { container } = render(<App />);
-    await waitFor(() => expect(editorEl(container)).toBeTruthy());
+    await waitFor(() => expect(container.querySelector("textarea.editor")).toBeTruthy());
 
     // raise a conflict
     server.opts.putStatus = 409;
-    setEditor(container, "# Conf\n\nmine");
+    const ta = container.querySelector("textarea.editor") as HTMLTextAreaElement;
+    fireEvent.input(ta, { target: { value: "# Conf\n\nmine" } });
     await waitFor(() => expect(container.querySelector(".conflict")).toBeTruthy());
 
     // online event → recover() must early-return (conflictRef true); no /me call clears it
@@ -412,7 +414,7 @@ describe("recover", () => {
     const row = server.seed({ title: "Me", content: "# Me\n\nbody" });
     location.hash = "#" + row.id;
     const { container } = render(<App />);
-    await waitFor(() => expect(editorEl(container)).toBeTruthy());
+    await waitFor(() => expect(container.querySelector("textarea.editor")).toBeTruthy());
     await waitFor(() => expect(kv.get(DRAFT + row.id)).toBeNull()); // no pending draft
 
     // force the offline banner via a failed per-memo revalidate, then recover via /me
@@ -432,7 +434,7 @@ describe("recover", () => {
     const row = server.seed({ title: "MeErr", content: "# MeErr\n\nbody" });
     location.hash = "#" + row.id;
     const { container } = render(<App />);
-    await waitFor(() => expect(editorEl(container)).toBeTruthy());
+    await waitFor(() => expect(container.querySelector("textarea.editor")).toBeTruthy());
     await waitFor(() => expect(kv.get(DRAFT + row.id)).toBeNull());
 
     // no pending draft, /me throws → recover's catch swallows it (no crash, stays offline)
@@ -522,7 +524,7 @@ describe("leaveCurrent", () => {
     const other = server.seed({ title: "Keep", content: "# Keep\n\nkeep body" });
     const { container } = render(<App />);
     // boot creates a fresh empty real memo (the open one). Switching away purges it.
-    await waitFor(() => expect(editorEl(container)).toBeTruthy());
+    await waitFor(() => expect(container.querySelector("textarea.editor")).toBeTruthy());
     await waitFor(() => expect(container.querySelectorAll(".memo-list li").length).toBeGreaterThanOrEqual(2));
 
     // open the seeded memo → leaveCurrent purges the fresh-empty boot memo
@@ -545,7 +547,7 @@ describe("leaveCurrent", () => {
     authedBoot();
     server.seed({ title: "Other", content: "# Other\n\nbody" });
     const { container } = render(<App />);
-    await waitFor(() => expect(editorEl(container)).toBeTruthy());
+    await waitFor(() => expect(container.querySelector("textarea.editor")).toBeTruthy());
     await waitFor(() => expect(container.querySelectorAll(".memo-list li").length).toBeGreaterThanOrEqual(2));
 
     // make the purge DELETE reject → leaveCurrent's catch swallows it
@@ -564,7 +566,7 @@ describe("leaveCurrent", () => {
     });
     // no crash; the seeded memo opened
     await waitFor(() =>
-      expect(editorValue(container)).toContain("body")
+      expect((container.querySelector("textarea.editor") as HTMLTextAreaElement)?.value).toContain("body")
     );
   });
 
@@ -588,7 +590,7 @@ describe("leaveCurrent", () => {
       window.dispatchEvent(new HashChangeEvent("hashchange"));
     });
     await waitFor(() =>
-      expect(editorValue(container)).toContain("real body")
+      expect((container.querySelector("textarea.editor") as HTMLTextAreaElement)?.value).toContain("real body")
     );
     await waitFor(() => {
       const temps = JSON.parse(localStorage.getItem(TEMPS_KEY) || "[]");
@@ -608,11 +610,11 @@ describe("deleteMemo", () => {
     const { container } = render(<App />);
     await waitFor(() => expect(container.querySelector(".status.offline")).toBeTruthy());
     await waitFor(() => expect(container.querySelector(".memo-list li")).toBeTruthy());
-    await waitFor(() => expect(editorEl(container)).toBeTruthy());
 
     // type content so a DRAFT exists for the temp, then delete it
+    const ta = container.querySelector("textarea.editor") as HTMLTextAreaElement;
     await act(async () => {
-      setEditor(container, "# Temp\n\nbody");
+      fireEvent.input(ta, { target: { value: "# Temp\n\nbody" } });
     });
     const tempId = JSON.parse(localStorage.getItem(TEMPS_KEY) || "[]")[0].id as number;
 
@@ -664,15 +666,14 @@ describe("background sync merge", () => {
     const row = server.seed({ title: "Merge", content: "# Merge\n\nbody" });
     location.hash = "#" + row.id;
     const { container } = render(<App />);
-    await waitFor(() => expect(editorEl(container)).toBeTruthy());
+    await waitFor(() => expect(container.querySelector("textarea.editor")).toBeTruthy());
 
     // make the local meta strictly newer than what the server will report:
     // edit + save bumps local updated_at; then freeze the server row's updated_at
     // older than the local copy so the merge keeps local.
+    const ta = container.querySelector("textarea.editor") as HTMLTextAreaElement;
     await act(async () => {
-      setEditor(container, "# Local newer title\n\nbody2");
-    });
-    await act(async () => {
+      fireEvent.input(ta, { target: { value: "# Local newer title\n\nbody2" } });
       fireEvent.keyDown(window, { key: "s", metaKey: true });
     });
     await waitFor(() => expect(server.memos.find((m) => m.id === row.id)?.content).toContain("body2"));
@@ -697,11 +698,12 @@ describe("background sync merge", () => {
     const row = server.seed({ title: "Dd", content: "# Dd" });
     location.hash = "#" + row.id;
     const { container } = render(<App />);
-    await waitFor(() => expect(editorEl(container)).toBeTruthy());
+    await waitFor(() => expect(container.querySelector("textarea.editor")).toBeTruthy());
 
     // trigger the deleted banner via a 404 PUT
     server.opts.putStatus = 404;
-    setEditor(container, "# Dd\n\nbye");
+    const ta = container.querySelector("textarea.editor") as HTMLTextAreaElement;
+    fireEvent.input(ta, { target: { value: "# Dd\n\nbye" } });
     await waitFor(() => expect(container.querySelector(".conflict span")?.textContent).toContain("삭제"));
 
     // discardDeleted: id != null branch wipes draft/cache and clears the editor
@@ -719,11 +721,12 @@ describe("background sync merge", () => {
     const row = server.seed({ title: "Ran", content: "# Ran" });
     location.hash = "#" + row.id;
     const { container } = render(<App />);
-    await waitFor(() => expect(editorEl(container)).toBeTruthy());
+    await waitFor(() => expect(container.querySelector("textarea.editor")).toBeTruthy());
 
     // trigger the deleted banner
     server.opts.putStatus = 404;
-    setEditor(container, "# Ran\n\nrescue offline");
+    const ta = container.querySelector("textarea.editor") as HTMLTextAreaElement;
+    fireEvent.input(ta, { target: { value: "# Ran\n\nrescue offline" } });
     await waitFor(() => expect(container.querySelector(".conflict span")?.textContent).toContain("삭제"));
 
     // now make the recoverAsNew POST reject → its catch → setOffline(true)
@@ -735,7 +738,7 @@ describe("background sync merge", () => {
     });
     await waitFor(() => expect(container.querySelector(".status.offline")).toBeTruthy());
     // the on-screen content (the draft safety net) is still shown
-    expect(editorValue(container)).toContain("rescue offline");
+    expect((container.querySelector("textarea.editor") as HTMLTextAreaElement).value).toContain("rescue offline");
   });
 });
 
@@ -755,7 +758,7 @@ describe("boot offline", () => {
     await waitFor(() => expect(container.querySelector(".status.offline")).toBeTruthy());
     // deep-link branch: hashed memo has local CONTENT_CACHE → openMemo(7)
     await waitFor(() =>
-      expect(editorValue(container)).toContain("deep linked body")
+      expect((container.querySelector("textarea.editor") as HTMLTextAreaElement)?.value).toContain("deep linked body")
     );
     // both cached list rows + temp are visible
     await waitFor(() => {
@@ -776,7 +779,7 @@ describe("boot offline", () => {
     const { container } = render(<App />);
     await waitFor(() => expect(container.querySelector(".status.offline")).toBeTruthy());
     // newMemo offline → a negative temp is created and opened
-    await waitFor(() => expect(editorEl(container)).toBeTruthy());
+    await waitFor(() => expect(container.querySelector("textarea.editor")).toBeTruthy());
     await waitFor(() => {
       const temps = JSON.parse(localStorage.getItem(TEMPS_KEY) || "[]");
       expect(temps.some((t: any) => t.id < 0)).toBe(true);

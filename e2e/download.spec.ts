@@ -1,6 +1,6 @@
 import { test, expect } from "./fixtures";
 import { readFileSync } from "node:fs";
-import { sel, seedMemo, purge, uniq, expectEditor } from "./helpers";
+import { sel, seedMemo, purge, uniq } from "./helpers";
 
 test.describe("download", () => {
   test("downloads the current memo as a .md named after its title", async ({ page, request }) => {
@@ -9,7 +9,7 @@ test.describe("download", () => {
     const id = await seedMemo(request, body);
     try {
       await page.goto(`/#${id}`);
-      await expectEditor(page, body);
+      await expect(page.locator(sel.editor)).toHaveValue(body);
 
       const [download] = await Promise.all([
         page.waitForEvent("download"),
@@ -28,7 +28,7 @@ test.describe("download", () => {
     const id = await seedMemo(request, body);
     try {
       await page.goto(`/#${id}`);
-      await expectEditor(page, body);
+      await expect(page.locator(sel.editor)).toHaveValue(body);
       const [download] = await Promise.all([
         page.waitForEvent("download"),
         page.locator(sel.downloadBtn).click(),

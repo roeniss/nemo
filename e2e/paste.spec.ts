@@ -1,5 +1,5 @@
 import { test, expect } from "./fixtures";
-import { sel, purge, blankMemo, expectEditor } from "./helpers";
+import { sel, purge, blankMemo } from "./helpers";
 
 const hashId = (page: import("@playwright/test").Page) =>
   page.evaluate(() => Number(location.hash.replace("#", "")));
@@ -16,7 +16,7 @@ const pasteImage = (
       const dt = new DataTransfer();
       dt.items.add(new File([new Uint8Array(bytes)], name, { type }));
       const ev = new ClipboardEvent("paste", { clipboardData: dt, bubbles: true, cancelable: true });
-      document.querySelector(".cm-content")!.dispatchEvent(ev);
+      document.querySelector("textarea.editor")!.dispatchEvent(ev);
     },
     { name, type, bytes }
   );
@@ -28,7 +28,9 @@ test.describe("image paste", () => {
     await pasteImage(page, "shot.png", "image/png", [1, 2, 3, 4]);
 
     await expect(page.locator(sel.toast)).toContainText("이미지를 첨부했어요");
-    await expectEditor(page, "# ![shot.png](data:image/png;base64,AQIDBA==)");
+    await expect(page.locator(sel.editor)).toHaveValue(
+      "# ![shot.png](data:image/png;base64,AQIDBA==)"
+    );
     await expect(page.locator(".status")).toHaveText("Saved");
 
     // and it actually renders as an <img> in the live preview (the #49 goal)
@@ -49,7 +51,7 @@ test.describe("image paste", () => {
     await pasteImage(page, "big.png", "image/png", new Array(1024 * 1024 + 1).fill(0));
 
     await expect(page.locator(sel.toast)).toContainText("이미지가 너무 커요");
-    await expectEditor(page, "# "); // untouched
+    await expect(page.locator(sel.editor)).toHaveValue("# "); // untouched
   });
 
   test("pasting a non-image file is ignored (no embed, no toast)", async ({ page }) => {
@@ -58,12 +60,12 @@ test.describe("image paste", () => {
       const dt = new DataTransfer();
       dt.items.add(new File(["hello"], "note.txt", { type: "text/plain" }));
       const ev = new ClipboardEvent("paste", { clipboardData: dt, bubbles: true, cancelable: true });
-      document.querySelector(".cm-content")!.dispatchEvent(ev);
+      document.querySelector("textarea.editor")!.dispatchEvent(ev);
     });
 
     // our handler leaves it to the browser; the synthetic event carries no text,
     // so nothing is inserted and no image toast appears
-    await expectEditor(page, "# ");
+    await expect(page.locator(sel.editor)).toHaveValue("# ");
     await expect(page.locator(sel.toast)).toHaveCount(0);
   });
 });

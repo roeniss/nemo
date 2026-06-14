@@ -2,7 +2,7 @@ import { test, expect } from "./fixtures";
 import { writeFileSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { sel, purge, blankMemo, uniq, expectEditor } from "./helpers";
+import { sel, purge, blankMemo, uniq } from "./helpers";
 
 type Meta = { id: number; title: string };
 
@@ -23,7 +23,7 @@ test.describe("file import", () => {
     await expect(page.locator(sel.toast)).toContainText("1개 문서를 등록했어요");
     await expect(page.locator(".memo-list")).toContainText(name);
     // the open blank memo is untouched — the file lands in a new memo, not the body
-    await expectEditor(page, "# ");
+    await expect(page.locator(sel.editor)).toHaveValue("# ");
 
     const list = (await (await request.get("/api/memos")).json()) as Meta[];
     const m = list.find((x) => x.title === name);
@@ -45,7 +45,7 @@ test.describe("file import", () => {
     await expect(page.locator(sel.toast)).toContainText("2개 문서를 등록했어요");
     await expect(page.locator(".memo-list")).toContainText(a);
     await expect(page.locator(".memo-list")).toContainText(b);
-    await expectEditor(page, "# ");
+    await expect(page.locator(sel.editor)).toHaveValue("# ");
 
     const list = (await (await request.get("/api/memos")).json()) as Meta[];
     const ma = list.find((x) => x.title === a);
@@ -68,7 +68,7 @@ test.describe("file import", () => {
 
     await expect(page.locator(sel.toast)).toContainText("1개 문서를 등록했어요");
     await expect(page.locator(".conflict")).toHaveCount(0); // no "불러올까요" banner
-    await expectEditor(page, "# ");
+    await expect(page.locator(sel.editor)).toHaveValue("# ");
 
     const list = (await (await request.get("/api/memos")).json()) as Meta[];
     const m = list.find((x) => x.title === name);
@@ -84,7 +84,7 @@ test.describe("file import", () => {
     await page.locator(sel.fileInput).setInputFiles(join(dir, name));
 
     await expect(page.locator(sel.toast)).toContainText("등록할 텍스트 파일이 없어요");
-    await expectEditor(page, "# ");
+    await expect(page.locator(sel.editor)).toHaveValue("# ");
     await expect(page.locator(".memo-list")).not.toContainText(name);
   });
 
@@ -101,7 +101,7 @@ test.describe("file import", () => {
     await expect(page.locator(sel.toast)).toContainText("1개 문서를 등록했어요");
     await expect(page.locator(".memo-list")).toContainText(name);
     // the editor (open blank memo) keeps its content — the drop didn't insert into it
-    await expectEditor(page, "# ");
+    await expect(page.locator(sel.editor)).toHaveValue("# ");
 
     const list = (await (await request.get("/api/memos")).json()) as Meta[];
     const m = list.find((x) => x.title === name);

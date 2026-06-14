@@ -30,36 +30,10 @@ export async function purge(request: APIRequestContext, id: number): Promise<voi
 
 // land on a fresh blank "# " memo (the new-doc default) and wait until it is the
 // stable current memo — avoids racing the async new-memo creation, where the old
-// The editable editor is now CodeMirror (a contenteditable .cm-content made of
-// per-line .cm-line divs), not a textarea — so its text can't be read with
-// toHaveValue. editorText joins the rendered lines back into the document; the
-// read-only trash viewer is still a real <textarea> (sel.viewer).
-export async function editorText(page: Page): Promise<string> {
-  return page.locator(`${sel.editor}`).evaluate((el) =>
-    Array.from(el.querySelectorAll(".cm-line"))
-      .map((l) => (l.textContent === "​" ? "" : l.textContent))
-      .join("\n")
-  );
-}
-
-// poll the editor document until it equals `expected` (the CM stand-in for
-// `await expect(locator).toHaveValue(expected)`)
-export async function expectEditor(page: Page, expected: string): Promise<void> {
-  await expect.poll(() => editorText(page)).toBe(expected);
-}
-
-// replace the whole editor document. Focus, select-all, then insert the text in
-// one insertText event (fast + multiline-safe — CM splits on the newlines).
-export async function fillEditor(page: Page, text: string): Promise<void> {
-  await page.locator(sel.editor).click();
-  await page.keyboard.press("ControlOrMeta+a");
-  await page.keyboard.insertText(text);
-}
-
 // blank memo still shows "# " before the new one becomes current
 export async function blankMemo(page: Page): Promise<void> {
   await page.goto("/");
-  await expectEditor(page, "# ");
+  await expect(page.locator("textarea.editor")).toHaveValue("# ");
   await expect(page).toHaveURL(/#\d+$/);
 }
 
@@ -67,15 +41,14 @@ export async function blankMemo(page: Page): Promise<void> {
 export async function openMemo(page: Page, id: number, expected?: string): Promise<void> {
   await page.goto(`/#${id}`);
   if (expected !== undefined) {
-    await expectEditor(page, expected);
+    await expect(page.locator("textarea.editor")).toHaveValue(expected);
   } else {
-    await expect(page.locator(sel.editor)).toBeVisible();
+    await expect(page.locator("textarea.editor")).toBeVisible();
   }
 }
 
 export const sel = {
-  editor: ".cm-editor .cm-content", // editable CodeMirror surface
-  viewer: "textarea.editor", // read-only trash viewer (still a textarea)
+  editor: "textarea.editor",
   newBtn: ".topbar .new-memo",
   importBtn: ".topbar .import",
   downloadBtn: ".topbar .download",

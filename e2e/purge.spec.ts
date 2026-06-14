@@ -1,5 +1,5 @@
 import { test, expect } from "./fixtures";
-import { sel, purge, blankMemo, expectEditor } from "./helpers";
+import { sel, purge, blankMemo } from "./helpers";
 
 const hashId = (page: import("@playwright/test").Page) =>
   page.evaluate(() => Number(location.hash.replace("#", "")));
@@ -48,7 +48,7 @@ test.describe("empty-memo cleanup", () => {
   test("a new memo with content is NOT purged", async ({ page, request }) => {
     await blankMemo(page);
     await page.locator(sel.editor).click();
-    await page.keyboard.insertText("Keep me\n\nhas content");
+    await page.keyboard.type("Keep me\n\nhas content");
     await expect(page.locator(".status")).toHaveText("Saved");
     const id = await hashId(page);
     try {
@@ -73,7 +73,7 @@ test.describe("empty-memo cleanup", () => {
       // still the current memo, still in the list, still on the server
       await expect(page).toHaveURL(new RegExp(`#${id}$`));
       await expect(activeRow(page)).toHaveCount(1);
-      await expectEditor(page, "# ");
+      await expect(page.locator(sel.editor)).toHaveValue("# ");
       expect((await request.get(`/api/memos/${id}`)).ok()).toBeTruthy();
     } finally {
       await purge(request, id);

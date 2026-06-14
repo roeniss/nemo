@@ -16,10 +16,6 @@
     "db:remote": "wrangler d1 execute nemo-db --remote --file=./schema.sql"
   },
   "dependencies": {
-    "@codemirror/commands": "^6.10.3",
-    "@codemirror/lang-markdown": "^6.5.0",
-    "@codemirror/state": "^6.6.0",
-    "@codemirror/view": "^6.43.1",
     "dompurify": "^3.4.10",
     "hono": "^4.12.25",
     "marked": "^18.0.5",

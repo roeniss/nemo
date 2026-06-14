@@ -1,5 +1,5 @@
 import { test, expect } from "./fixtures";
-import { sel, purge, uniq, seedMemo, expectEditor } from "./helpers";
+import { sel, purge, uniq, seedMemo } from "./helpers";
 
 // drop every /api/* call to simulate being offline
 async function goOffline(page: import("@playwright/test").Page) {
@@ -27,7 +27,7 @@ test.describe("offline", () => {
       await expect(page.locator(".status.offline")).toBeVisible();
       await expect(page).toHaveURL(/#-\d+$/); // temp ids are negative
       await page.locator(sel.editor).click();
-      await page.keyboard.insertText(`${body}\n\nwritten while offline`);
+      await page.keyboard.type(`${body}\n\nwritten while offline`);
 
       // reconnect → recover() materializes the temp to a real server memo
       await goOnline(page);
@@ -54,7 +54,7 @@ test.describe("offline", () => {
     try {
       // visit online once so the list (localStorage) and content (IndexedDB) are cached
       await page.goto(`/#${id}`);
-      await expectEditor(page, body);
+      await expect(page.locator(sel.editor)).toHaveValue(body);
 
       // cut the network, then reload: the boot fetch fails and the app falls back
       // to the cached list + cached content for the hashed memo
@@ -63,7 +63,7 @@ test.describe("offline", () => {
 
       await expect(page.locator(".status.offline")).toBeVisible();
       await expect(page).toHaveURL(new RegExp(`#${id}$`));
-      await expectEditor(page, body); // served from cache, no network
+      await expect(page.locator(sel.editor)).toHaveValue(body); // served from cache, no network
     } finally {
       await goOnline(page);
       await purge(request, id);

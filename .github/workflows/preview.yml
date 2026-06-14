@@ -58,6 +58,26 @@ jobs:
           fi
           echo "url=$url" >> "$GITHUB_OUTPUT"
 
+      # A constructed/printed URL isn't proof the preview actually serves — if
+      # preview URLs are disabled on the Worker the alias 404s (Cloudflare error
+      # 1042). Probe it and fail the job unless it returns 200, so a green check
+      # means a genuinely reachable preview, not just a well-formed string.
+      - name: Verify preview is live
+        env:
+          URL: ${{ steps.upload.outputs.url }}
+        run: |
+          set -euo pipefail
+          echo "Probing ${URL}/ ..."
+          code=000
+          for i in $(seq 1 15); do
+            code="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 10 "${URL}/" || echo 000)"
+            echo "attempt ${i}: HTTP ${code}"
+            [ "$code" = "200" ] && { echo "✅ preview reachable"; exit 0; }
+            sleep 4
+          done
+          echo "::error::Preview ${URL} did not return 200 (last: ${code}) — preview URLs may be disabled (preview_urls in wrangler.jsonc) or routing hasn't propagated." >&2
+          exit 1
+
       - name: Upsert preview comment
         uses: actions/github-script@v7
         with:

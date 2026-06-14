@@ -8,6 +8,13 @@ on:
     branches: [main]
   workflow_dispatch:
 
+# serialize production deploys — never run two at once. Unlike CI, don't cancel
+# an in-flight deploy (a half-applied deploy is worse than a queued one); let it
+# finish and run the next after.
+concurrency:
+  group: deploy-prod
+  cancel-in-progress: false
+
 jobs:
   deploy:
     runs-on: ubuntu-latest

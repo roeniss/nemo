@@ -14,6 +14,7 @@ export const NEW_DOC = "# "; // every new memo opens with the title heading read
 export const PREVIEW_DEBOUNCE = 200; // recompute the rendered preview this long after a keystroke
 export const SAVE_DEBOUNCE = 300; // save this long after the last keystroke (idle)
 export const SAVE_MAX_WAIT = 2000; // ...but at least this often during continuous typing
+export const SEARCH_DEBOUNCE = 200; // run the server-side body search this long after the last keystroke
 
 export async function api(path: string, init?: RequestInit) {
   return fetch(`/api${path}`, {

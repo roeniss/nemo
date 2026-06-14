@@ -271,6 +271,22 @@ app.get("/api/memos", async (c) => {
   return c.json(results);
 });
 
+// full-text-ish search across title AND content (the sidebar list only carries
+// titles, so body matching has to happen server-side). Returns the same light
+// MemoMeta shape as the list. Empty query → empty result (no match-all).
+app.get("/api/search", async (c) => {
+  const q = (c.req.query("q") ?? "").trim();
+  if (!q) return c.json([]);
+  // escape LIKE wildcards so "%" / "_" in the query match literally, not as patterns
+  const like = `%${q.replace(/[\\%_]/g, "\\$&")}%`;
+  const { results } = await c.env.DB.prepare(
+    "SELECT id, title, updated_at FROM memos WHERE deleted_at IS NULL AND (title LIKE ? ESCAPE '\\' OR content LIKE ? ESCAPE '\\') ORDER BY updated_at DESC"
+  )
+    .bind(like, like)
+    .all();
+  return c.json(results);
+});
+
 app.post("/api/memos", async (c) => {
   const now = Date.now();
   const row = await c.env.DB.prepare(

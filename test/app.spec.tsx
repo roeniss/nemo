@@ -31,6 +31,8 @@ function makeServer() {
     postThrows: false, // POST /api/memos network failure (offline path)
     putStatus: 0, // override PUT status (409/404) when > 0, else normal
     loginStatus: 200, // /login result
+    searchThrows: false, // GET /api/search network failure (offline path)
+    searchStatus: 0, // override GET /api/search status (e.g. 500) when > 0
   };
 
   function meta(r: Row) {
@@ -126,6 +128,20 @@ function makeServer() {
       const ti = trash.findIndex((x) => x.id === id);
       if (ti !== -1) trash.splice(ti, 1);
       return json({ ok: true });
+    }
+
+    // ---- body search (server-side; the sidebar list only carries titles) ----
+    if (path.startsWith("/search") && method === "GET") {
+      if (opts.searchThrows) throw new Error("offline");
+      if (opts.searchStatus) return new Response("", { status: opts.searchStatus });
+      const q = (new URLSearchParams(path.split("?")[1] ?? "").get("q") ?? "").trim().toLowerCase();
+      if (!q) return json([]);
+      return json(
+        memos
+          .filter((r) => r.title.toLowerCase().includes(q) || r.content.toLowerCase().includes(q))
+          .map(meta)
+          .sort((a, b) => b.updated_at - a.updated_at)
+      );
     }
 
     return new Response("not found", { status: 404 });
@@ -460,6 +476,56 @@ describe("toolbar and sidebar", () => {
     });
     // no matches branch
     fireEvent.input(container.querySelector(".search")!, { target: { value: "zzz" } });
+    await waitFor(() => expect(container.querySelector(".empty")?.textContent).toBe("No matches"));
+  });
+
+  it("matches the memo body (not just the title) via the server search", async () => {
+    authedBoot();
+    server.seed({ title: "Alpha", content: "# Alpha\njust the basics" });
+    server.seed({ title: "Beta", content: "# Beta\nhides a pineapple in its body" });
+    const { container } = render(<App />);
+    await waitFor(() =>
+      expect(container.querySelectorAll(".memo-list li").length).toBeGreaterThanOrEqual(2)
+    );
+    // "pineapple" is in no title — only the debounced server body search finds Beta
+    fireEvent.input(container.querySelector(".search")!, { target: { value: "pineapple" } });
+    await waitFor(() => {
+      const titles = Array.from(container.querySelectorAll(".memo-title")).map((e) => e.textContent);
+      expect(titles).toContain("Beta");
+      expect(titles).not.toContain("Alpha");
+    });
+  });
+
+  it("falls back to title-only matching when the body search request throws", async () => {
+    authedBoot();
+    server.opts.searchThrows = true; // /search is offline
+    server.seed({ title: "Gamma", content: "# Gamma\ncontains a rare zebra" });
+    const { container } = render(<App />);
+    await waitFor(() => expect(container.querySelectorAll(".memo-list li").length).toBeGreaterThanOrEqual(1));
+    // a body-only word: with the body search failing, nothing matches…
+    fireEvent.input(container.querySelector(".search")!, { target: { value: "zebra" } });
+    await waitFor(() =>
+      expect(server.fetchImpl.mock.calls.some((c) => String(c[0]).includes("/search?q=zebra"))).toBe(true)
+    );
+    await waitFor(() => expect(container.querySelector(".empty")?.textContent).toBe("No matches"));
+    // …but a title word still resolves locally, with no network
+    fireEvent.input(container.querySelector(".search")!, { target: { value: "gamma" } });
+    await waitFor(() => {
+      const titles = Array.from(container.querySelectorAll(".memo-title")).map((e) => e.textContent);
+      expect(titles).toContain("Gamma");
+    });
+  });
+
+  it("ignores a non-ok body search response", async () => {
+    authedBoot();
+    server.opts.searchStatus = 500; // /search errors out
+    server.seed({ title: "Delta", content: "# Delta\nguards a secret walrus" });
+    const { container } = render(<App />);
+    await waitFor(() => expect(container.querySelectorAll(".memo-list li").length).toBeGreaterThanOrEqual(1));
+    fireEvent.input(container.querySelector(".search")!, { target: { value: "walrus" } });
+    await waitFor(() =>
+      expect(server.fetchImpl.mock.calls.some((c) => String(c[0]).includes("/search?q=walrus"))).toBe(true)
+    );
     await waitFor(() => expect(container.querySelector(".empty")?.textContent).toBe("No matches"));
   });
 

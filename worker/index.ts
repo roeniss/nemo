@@ -98,16 +98,19 @@ app.post("/api/logout", (c) => {
 // e.g. a Siri Shortcut ("Hey Siri, make a new note"). Registered before the JWT
 // gate so the cookie checks below never apply to it; auth is instead a static
 // Bearer token matched (by hash) against the api_tokens table.
+// Every /api/ext/* response uses a single shape — { "response": "<string>" } —
+// so simple clients (Siri Shortcuts) can read one field: "done" on success, or a
+// short error message otherwise.
 app.use("/api/ext/*", async (c, next) => {
   const auth = c.req.header("Authorization") ?? "";
   const token = auth.startsWith("Bearer ") ? auth.slice(7) : "";
-  if (!token) return c.json({ error: "unauthorized" }, 401);
+  if (!token) return c.json({ response: "unauthorized" }, 401);
   const row = await c.env.DB.prepare(
     "SELECT id FROM api_tokens WHERE token_hash = ? AND revoked_at IS NULL"
   )
     .bind(await hashToken(token))
     .first<{ id: number }>();
-  if (!row) return c.json({ error: "unauthorized" }, 401);
+  if (!row) return c.json({ response: "unauthorized" }, 401);
   // best-effort "last used" stamp for the settings list — never blocks the call
   await c.env.DB.prepare("UPDATE api_tokens SET last_used_at = ? WHERE id = ?")
     .bind(Date.now(), row.id)
@@ -123,16 +126,20 @@ app.post("/api/ext/memos", async (c) => {
     .json<{ content?: unknown }>()
     .catch(() => ({ content: undefined }));
   if (typeof content !== "string" || !content.trim()) {
-    return c.json({ error: "content required" }, 400);
+    return c.json({ response: "content required" }, 400);
   }
   const now = Date.now();
-  const row = await c.env.DB.prepare(
-    "INSERT INTO memos (title, content, created_at, updated_at) VALUES (?, ?, ?, ?) RETURNING *"
+  await c.env.DB.prepare(
+    "INSERT INTO memos (title, content, created_at, updated_at) VALUES (?, ?, ?, ?)"
   )
     .bind(titleFrom(content), content, now, now)
-    .first();
-  return c.json(row, 201);
+    .run();
+  return c.json({ response: "done" }, 201);
 });
+
+// any other (authenticated) method/path under the integration surface — keeps
+// the unified { response } shape instead of Hono's default text 404.
+app.all("/api/ext/*", (c) => c.json({ response: "not found" }, 404));
 
 // gate everything under /api except the public auth + /api/ext routes
 app.use("/api/*", (c, next) => {

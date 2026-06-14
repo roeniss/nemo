@@ -122,8 +122,13 @@ describe("integration surface /api/ext/memos (Bearer-gated)", () => {
       body: body === undefined ? undefined : JSON.stringify(body),
     });
 
+  // every ext response is the unified { response: "<string>" } shape
+  const bodyOf = async (r: Response) => (await r.json()) as { response: string };
+
   it("rejects a missing or malformed Authorization header", async () => {
-    expect((await ext(null, { content: "x" })).status).toBe(401);
+    const none = await ext(null, { content: "x" });
+    expect(none.status).toBe(401);
+    expect(await bodyOf(none)).toEqual({ response: "unauthorized" });
     // a non-Bearer scheme is treated as no token
     const basic = await req("/api/ext/memos", {
       method: "POST",
@@ -134,16 +139,23 @@ describe("integration surface /api/ext/memos (Bearer-gated)", () => {
   });
 
   it("rejects an unknown token", async () => {
-    expect((await ext("nemo_deadbeef", { content: "x" })).status).toBe(401);
+    const r = await ext("nemo_deadbeef", { content: "x" });
+    expect(r.status).toBe(401);
+    expect(await bodyOf(r)).toEqual({ response: "unauthorized" });
   });
 
-  it("creates a memo from content with a valid token", async () => {
+  it("creates a memo from content with a valid token, returning { response: done }", async () => {
     const { body } = await mint("siri");
     const r = await ext(body.token, { content: "TODO: make a shower" });
     expect(r.status).toBe(201);
-    const memo = (await r.json()) as { id: number; title: string; content: string };
-    expect(memo.title).toBe("TODO: make a shower");
-    expect(memo.content).toBe("TODO: make a shower");
+    expect(await bodyOf(r)).toEqual({ response: "done" });
+
+    // the response no longer echoes the row, so verify the memo landed in the DB
+    const memo = await (env.DB as D1)
+      .prepare("SELECT title, content FROM memos ORDER BY id DESC LIMIT 1")
+      .first<{ title: string; content: string }>();
+    expect(memo?.title).toBe("TODO: make a shower");
+    expect(memo?.content).toBe("TODO: make a shower");
 
     // a successful call stamps last_used_at, surfaced in the settings list
     const list = (await (
@@ -152,11 +164,23 @@ describe("integration surface /api/ext/memos (Bearer-gated)", () => {
     expect(list[0].last_used_at).not.toBeNull();
   });
 
-  it("rejects empty, blank, or missing content with 400", async () => {
+  it("rejects empty, blank, or missing content with a unified 400", async () => {
     const { body } = await mint("siri");
-    expect((await ext(body.token, { content: "" })).status).toBe(400);
+    const empty = await ext(body.token, { content: "" });
+    expect(empty.status).toBe(400);
+    expect(await bodyOf(empty)).toEqual({ response: "content required" });
     expect((await ext(body.token, { content: "   " })).status).toBe(400);
     // no body at all -> JSON parse caught -> content undefined
     expect((await ext(body.token)).status).toBe(400);
+  });
+
+  it("returns a unified 404 for an authenticated wrong method/path", async () => {
+    const { body } = await mint("siri");
+    // valid token but GET (no route) → gate passes → catch-all
+    const r = await req("/api/ext/memos", {
+      headers: { Authorization: `Bearer ${body.token}` },
+    });
+    expect(r.status).toBe(404);
+    expect(await bodyOf(r)).toEqual({ response: "not found" });
   });
 });

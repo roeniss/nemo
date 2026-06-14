@@ -36,8 +36,17 @@ that can't drive the browser login (e.g. a Siri Shortcut) create memos. It is
 **isolated from the web app's JWT-cookie API** and has exactly one endpoint:
 
 - `POST /api/ext/memos` — body `{ "content": "..." }` → creates a memo (the title
-  is the first non-empty line) and returns the new row. `201` on success, `400`
-  if `content` is missing/blank, `401` if the token is missing/invalid.
+  is the first non-empty line).
+
+Every response on this surface uses one shape — `{ "response": "<string>" }` — so a
+simple client (Siri) can read a single field:
+
+| Status | `response` | When |
+| --- | --- | --- |
+| `201` | `"done"` | created |
+| `400` | `"content required"` | `content` missing/blank/not a string |
+| `401` | `"unauthorized"` | token missing/invalid/revoked |
+| `404` | `"not found"` | authenticated, but wrong method/path |
 
 Authenticate with `Authorization: Bearer <token>`. Tokens are managed from the
 in-app **⚙ Settings** page (sidebar): *Generate token* shows the plaintext **once**

@@ -17,6 +17,25 @@ export function useToast() {
   return { notice, flash };
 }
 
+// Render markdown, tagging each top-level block with its 0-based source line
+// (data-source-line) so the preview can be scrolled to follow the editor caret.
+// We render block-by-block to know each block's line, threading the shared link
+// definitions through so reference-style links still resolve.
+function renderWithLines(src: string): string {
+  const tokens = marked.lexer(src);
+  let line = 0;
+  let out = "";
+  for (const tok of tokens) {
+    const one = [tok] as ReturnType<typeof marked.lexer>;
+    one.links = tokens.links;
+    // tag the block's opening tag; "space"/empty tokens render to "" and just
+    // advance the line counter.
+    out += marked.parser(one).replace(/^(\s*)<([a-zA-Z][\w-]*)/, `$1<$2 data-source-line="${line}"`);
+    line += (tok.raw.match(/\n/g) || []).length;
+  }
+  return out;
+}
+
 // live markdown preview, debounced so marked+DOMPurify don't run on every keystroke.
 // Returns sanitized html.
 export function usePreview(content: string) {
@@ -25,6 +44,6 @@ export function usePreview(content: string) {
     const t = setTimeout(() => setSrc(content), PREVIEW_DEBOUNCE);
     return () => clearTimeout(t);
   }, [content]);
-  const html = useMemo(() => DOMPurify.sanitize(marked.parse(src) as string), [src]);
+  const html = useMemo(() => DOMPurify.sanitize(renderWithLines(src)), [src]);
   return { html };
 }

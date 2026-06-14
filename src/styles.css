@@ -258,7 +258,9 @@ input {
   border: none;
   outline: none;
   resize: none;
-  padding: 20px;
+  /* the tall bottom padding lets the last line scroll up off the bottom edge,
+     so writing at the end of a long memo isn't cramped against the floor */
+  padding: 20px 20px 50vh;
   color: var(--fg);
   background: var(--bg);
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;

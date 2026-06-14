@@ -3,6 +3,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   api,
   byRecent,
+  caretLine,
+  centerDelta,
   hashId,
   isBlank,
   readList,
@@ -67,6 +69,27 @@ describe("isBlank", () => {
   it("returns false for real content", () => {
     expect(isBlank("# Title")).toBe(false);
     expect(isBlank("hello")).toBe(false);
+  });
+});
+
+describe("caretLine", () => {
+  it("is 0 at the very start", () => {
+    expect(caretLine("abc\ndef", 0)).toBe(0);
+  });
+  it("counts the newlines before the caret", () => {
+    const text = "# H\n\npara";
+    expect(caretLine(text, text.length)).toBe(2); // on "para"
+    expect(caretLine(text, 4)).toBe(1); // on the blank line
+  });
+});
+
+describe("centerDelta", () => {
+  it("returns the delta that centers the block in the viewport", () => {
+    // block top at 200 within a 200px viewport, block 40px tall → 200 - 80 = 120
+    expect(centerDelta(200, 40, 200)).toBe(120);
+  });
+  it("is negative when the block sits above center", () => {
+    expect(centerDelta(0, 40, 200)).toBe(-80);
   });
 });
 

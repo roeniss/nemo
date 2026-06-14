@@ -2741,61 +2741,88 @@ describe("background sync reload aborts when the user types mid-fetch (711 false
 });
 
 // ===========================================================================
-// PREVIEW SCROLL SYNC (desktop): the rendered pane follows the editor so
-// typing past the fold doesn't strand the preview out of view.
+// PREVIEW CARET CENTERING (desktop): the rendered block under the editor caret
+// is scrolled to the vertical middle of the preview, so the preview follows
+// wherever you're typing. happy-dom doesn't lay out, so we fake the rects.
 // ===========================================================================
-describe("preview scroll sync", () => {
-  // happy-dom doesn't lay out, so scroll/clientHeight are 0 — fake them.
-  function fakeMetrics(el: HTMLElement, scrollHeight: number, clientHeight: number) {
-    Object.defineProperty(el, "scrollHeight", { value: scrollHeight, configurable: true });
-    Object.defineProperty(el, "clientHeight", { value: clientHeight, configurable: true });
+describe("preview caret centering", () => {
+  const mkRect = (top: number, height: number) =>
+    ({ top, height, bottom: top + height, left: 0, right: 0, width: 0, x: 0, y: 0, toJSON() {} });
+  // happy-dom doesn't lay out. Model a viewport whose top is at screen 0, and a
+  // block whose on-screen top shifts with scrollTop (as real rects do) — so the
+  // centering converges to `docOffset - (viewportH - blockH) / 2` in one step,
+  // regardless of how many times the handler runs.
+  function viewport(pv: HTMLElement, h: number) {
+    Object.defineProperty(pv, "clientHeight", { value: h, configurable: true });
+    Object.defineProperty(pv, "getBoundingClientRect", { configurable: true, value: () => mkRect(0, h) });
+  }
+  function place(el: HTMLElement, pv: HTMLElement, docOffset: number, blockH: number) {
+    Object.defineProperty(el, "clientHeight", { value: blockH, configurable: true });
+    Object.defineProperty(el, "getBoundingClientRect", {
+      configurable: true,
+      value: () => mkRect(docOffset - pv.scrollTop, blockH),
+    });
   }
 
-  async function openEditor() {
+  async function openEditor(content: string) {
     authedBoot();
-    const row = server.seed({ title: "Scroll", content: "# Scroll\n\nbody" });
+    const row = server.seed({ title: "C", content });
     location.hash = "#" + row.id;
     const { container } = render(<App />);
     await waitFor(() =>
-      expect((container.querySelector("textarea.editor") as HTMLTextAreaElement)?.value).toContain("body")
+      expect((container.querySelector("textarea.editor") as HTMLTextAreaElement)?.value).toBe(content)
     );
     const ta = container.querySelector("textarea.editor") as HTMLTextAreaElement;
     const pv = container.querySelector(".preview") as HTMLDivElement;
+    // the preview is debounced — wait until it has rendered the content (all the
+    // sample docs end in "body") before tests read its data-source-line blocks.
+    await waitFor(() => expect(pv.textContent).toContain("body"));
     return { ta, pv };
   }
 
-  it("scrolls the preview proportionally when the editor scrolls", async () => {
-    const { ta, pv } = await openEditor();
-    fakeMetrics(ta, 1000, 500); // edMax = 500
-    fakeMetrics(pv, 2000, 500); // pvMax = 1500
-    ta.scrollTop = 250; // halfway down the editor
+  function caret(ta: HTMLTextAreaElement, pos: number) {
+    ta.selectionStart = ta.selectionEnd = pos;
+  }
+
+  // NB: happy-dom's DOMPurify drops the *first* block's tag (a test-env quirk —
+  // real browsers keep it, covered by e2e), so these assert on later blocks.
+  // "intro\n\n# Scroll\n\nbody" → p@0 (first, dropped), h1@2, p@4.
+  const DOC = "intro\n\n# Scroll\n\nbody";
+
+  it("centers the block at the caret line in the preview", async () => {
+    const { ta, pv } = await openEditor(DOC);
+    const block = pv.querySelector('[data-source-line="4"]') as HTMLElement; // the <p>body
+    expect(block).toBeTruthy();
+    viewport(pv, 200);
+    place(block, pv, 300, 40); // block sits 300px down, 40px tall
+    caret(ta, DOC.length); // caret on "body" (line 4)
     await act(async () => {
-      fireEvent.scroll(ta);
+      fireEvent.select(ta);
     });
-    expect(pv.scrollTop).toBe(750); // (250 / 500) * 1500
+    expect(pv.scrollTop).toBe(300 - (200 - 40) / 2); // centered: 220
   });
 
-  it("does nothing when the editor has no overflow (edMax <= 0)", async () => {
-    const { ta, pv } = await openEditor();
-    fakeMetrics(ta, 500, 500); // edMax = 0
-    fakeMetrics(pv, 2000, 500);
-    pv.scrollTop = 42;
+  it("uses the last block at or before the caret line (stops past it)", async () => {
+    const { ta, pv } = await openEditor(DOC);
+    const h1 = pv.querySelector('[data-source-line="2"]') as HTMLElement; // # Scroll
+    viewport(pv, 200);
+    place(h1, pv, 400, 30);
+    caret(ta, 16); // on the blank line 3 → newest block at/<= line3 is the h1@2
     await act(async () => {
-      fireEvent.scroll(ta);
+      fireEvent.select(ta);
     });
-    expect(pv.scrollTop).toBe(42); // untouched
+    expect(pv.scrollTop).toBe(400 - (200 - 30) / 2); // centered on the h1 (315), p@4 skipped
   });
 
-  it("does nothing when the preview has no overflow (pvMax <= 0)", async () => {
-    const { ta, pv } = await openEditor();
-    fakeMetrics(ta, 1000, 500); // edMax = 500
-    fakeMetrics(pv, 500, 500); // pvMax = 0
-    ta.scrollTop = 250;
-    pv.scrollTop = 7;
+  it("does nothing when no block precedes the caret line", async () => {
+    const { ta, pv } = await openEditor("intro\n\nbody"); // p@0 (dropped), p@2
+    viewport(pv, 200);
+    pv.scrollTop = 5;
+    caret(ta, 0); // line 0, before the only surviving block (p@2)
     await act(async () => {
-      fireEvent.scroll(ta);
+      fireEvent.select(ta);
     });
-    expect(pv.scrollTop).toBe(7); // untouched
+    expect(pv.scrollTop).toBe(5); // untouched
   });
 });
 

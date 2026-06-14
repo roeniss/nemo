@@ -1,0 +1,107 @@
+// Settings page: manage API tokens for the external integration surface
+// (/api/ext/*, e.g. a Siri Shortcut). Deliberately plain — list, generate, revoke.
+import { useEffect, useState } from "react";
+import { api } from "./lib";
+
+type TokenMeta = {
+  id: number;
+  label: string;
+  created_at: number;
+  last_used_at: number | null;
+};
+
+export function Settings({ flash }: { flash: (msg: string) => void }) {
+  const [tokens, setTokens] = useState<TokenMeta[]>([]);
+  const [label, setLabel] = useState("");
+  const [created, setCreated] = useState<string | null>(null); // plaintext, shown once
+  const [loading, setLoading] = useState(true);
+
+  async function load() {
+    try {
+      const r = await api("/tokens");
+      setTokens(r.ok ? await r.json() : []);
+    } catch {
+      setTokens([]); // offline / error — show an empty list rather than crash
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    load();
+  }, []);
+
+  async function create() {
+    const r = await api("/tokens", {
+      method: "POST",
+      body: JSON.stringify({ label: label.trim() }),
+    });
+    const t = (await r.json()) as { token: string };
+    setCreated(t.token); // reveal once; the server never returns it again
+    setLabel("");
+    await load();
+  }
+
+  async function revoke(id: number) {
+    await api(`/tokens/${id}`, { method: "DELETE" });
+    await load();
+  }
+
+  async function copy(token: string) {
+    try {
+      await navigator.clipboard.writeText(token);
+      flash("Token copied");
+    } catch {
+      flash("Copy failed — select the token and copy it manually");
+    }
+  }
+
+  return (
+    <div className="settings">
+      <h2>API tokens</h2>
+      <p className="muted">
+        For external integrations like a Siri Shortcut. Send the token as{" "}
+        <code>Authorization: Bearer &lt;token&gt;</code> when calling{" "}
+        <code>POST /api/ext/memos</code> with a JSON body{" "}
+        <code>{'{ "content": "..." }'}</code>.
+      </p>
+
+      <div className="token-create">
+        <input
+          placeholder="Label (e.g. iPhone Siri)"
+          value={label}
+          onChange={(e) => setLabel(e.currentTarget.value)}
+        />
+        <button onClick={create}>Generate token</button>
+      </div>
+
+      {created && (
+        <div className="token-reveal">
+          <p>Copy this token now — it won't be shown again:</p>
+          <code className="token-value">{created}</code>
+          <div className="token-reveal-actions">
+            <button onClick={() => copy(created)}>Copy</button>
+            <button className="ghost" onClick={() => setCreated(null)}>
+              Done
+            </button>
+          </div>
+        </div>
+      )}
+
+      <ul className="token-list">
+        {tokens.map((t) => (
+          <li key={t.id}>
+            <span className="token-label">{t.label || "(no label)"}</span>
+            <span className="muted">{t.last_used_at ? "used" : "never used"}</span>
+            <button className="del" onClick={() => revoke(t.id)}>
+              Revoke
+            </button>
+          </li>
+        ))}
+        {tokens.length === 0 && (
+          <li className="empty">{loading ? "Loading…" : "No tokens yet"}</li>
+        )}
+      </ul>
+    </div>
+  );
+}

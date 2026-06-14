@@ -29,6 +29,39 @@ Read endpoints (auth-protected):
 - `GET /api/memos/:id/versions` — list snapshots (newest first; no content)
 - `GET /api/memos/:id/versions/:versionId` — a single snapshot's full content
 
+## Integration API (Siri Shortcut)
+
+A separate, token-authenticated surface under `/api/ext/*` lets external clients
+that can't drive the browser login (e.g. a Siri Shortcut) create memos. It is
+**isolated from the web app's JWT-cookie API** and has exactly one endpoint:
+
+- `POST /api/ext/memos` — body `{ "content": "..." }` → creates a memo (the title
+  is the first non-empty line) and returns the new row. `201` on success, `400`
+  if `content` is missing/blank, `401` if the token is missing/invalid.
+
+Authenticate with `Authorization: Bearer <token>`. Tokens are managed from the
+in-app **⚙ Settings** page (sidebar): *Generate token* shows the plaintext **once**
+(only a SHA-256 hash is stored — it can't be recovered), and *Revoke* disables it.
+
+```bash
+curl -X POST https://nemo.roeni.ss/api/ext/memos \
+  -H "Authorization: Bearer nemo_xxxxxxxx" \
+  -H "content-type: application/json" \
+  -d '{"content":"TODO: make a shower"}'
+```
+
+**Siri Shortcut** ("Hey Siri, make a new note"):
+1. In the **Shortcuts** app, add a *Text* action (or *Ask for Input* → dictation)
+   for the note body.
+2. Add **Get Contents of URL**: URL `https://nemo.roeni.ss/api/ext/memos`,
+   Method `POST`, Headers `Authorization: Bearer <your token>`, Request Body
+   *JSON* with a `content` field set to the Text from step 1.
+3. Name the shortcut "make a new note" — that becomes the Siri phrase.
+
+> Tokens live in a new `api_tokens` table. Apply the schema to create it —
+> `npm run db:local` (local) and `npm run db:remote` (production); both use
+> `CREATE TABLE IF NOT EXISTS`, so re-running is safe.
+
 ## Local development
 ```bash
 npm install

@@ -2799,3 +2799,32 @@ describe("preview scroll sync", () => {
   });
 });
 
+describe("settings view", () => {
+  it("opens the Settings page from the sidebar and returns to the memos view", async () => {
+    authedBoot();
+    const { container } = render(<App />);
+    await waitFor(() => expect(container.querySelector(".side-tabs")).toBeTruthy());
+
+    // the sidebar header button (replacing the old "+ New") opens Settings
+    const settingsBtn = Array.from(container.querySelectorAll(".side-head button")).find((b) =>
+      b.textContent?.includes("Settings")
+    ) as HTMLButtonElement;
+    await act(async () => {
+      fireEvent.click(settingsBtn);
+    });
+
+    // Settings page renders in the main pane; the sidebar memo/trash list is hidden
+    await waitFor(() => expect(container.querySelector(".settings")).toBeTruthy());
+    expect(settingsBtn.className).toContain("active");
+    expect(container.querySelector(".memo-list")).toBeFalsy();
+    // GET /api/tokens 404s in this harness → the component shows its empty state
+    await waitFor(() => expect(container.textContent).toContain("No tokens yet"));
+
+    // the Memos tab leaves Settings
+    await act(async () => {
+      fireEvent.click(container.querySelectorAll(".side-tabs button")[0]);
+    });
+    await waitFor(() => expect(container.querySelector(".settings")).toBeFalsy());
+  });
+});
+

@@ -22,6 +22,21 @@ const HOUR = 60 * 60 * 1000;
 const sessionGap = (env: Bindings) => Number(env.HISTORY_GAP_MS) || HOUR;
 const maxSession = (env: Bindings) => Number(env.HISTORY_SESSION_MS) || HOUR;
 
+// --- api tokens (external integration auth) -----------------------------
+// Tokens for the /api/ext/* surface are stored hashed (SHA-256). The plaintext
+// is shown to the user once at creation (POST /api/tokens) and never persisted,
+// so a DB leak can't be replayed against the integration API.
+function newToken(): string {
+  const bytes = new Uint8Array(32);
+  crypto.getRandomValues(bytes);
+  return "nemo_" + Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+async function hashToken(token: string): Promise<string> {
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(token));
+  return Array.from(new Uint8Array(digest), (b) => b.toString(16).padStart(2, "0")).join("");
+}
+
 const app = new Hono<{ Bindings: Bindings }>();
 
 // --- auth ---------------------------------------------------------------
@@ -78,19 +93,91 @@ app.post("/api/logout", (c) => {
   return c.json({ ok: true });
 });
 
-// gate everything under /api except the public auth routes
+// --- external integration surface (/api/ext/*) --------------------------
+// Token-authenticated API for clients that can't drive the browser JWT login —
+// e.g. a Siri Shortcut ("Hey Siri, make a new note"). Registered before the JWT
+// gate so the cookie checks below never apply to it; auth is instead a static
+// Bearer token matched (by hash) against the api_tokens table.
+app.use("/api/ext/*", async (c, next) => {
+  const auth = c.req.header("Authorization") ?? "";
+  const token = auth.startsWith("Bearer ") ? auth.slice(7) : "";
+  if (!token) return c.json({ error: "unauthorized" }, 401);
+  const row = await c.env.DB.prepare(
+    "SELECT id FROM api_tokens WHERE token_hash = ? AND revoked_at IS NULL"
+  )
+    .bind(await hashToken(token))
+    .first<{ id: number }>();
+  if (!row) return c.json({ error: "unauthorized" }, 401);
+  // best-effort "last used" stamp for the settings list — never blocks the call
+  await c.env.DB.prepare("UPDATE api_tokens SET last_used_at = ? WHERE id = ?")
+    .bind(Date.now(), row.id)
+    .run();
+  return next();
+});
+
+// create a memo from content in a single call (the web app's POST /api/memos
+// makes an empty one, then PUTs — that two-step needs the editor). RESTful:
+// POST to the memos collection = create.
+app.post("/api/ext/memos", async (c) => {
+  const { content } = await c.req
+    .json<{ content?: unknown }>()
+    .catch(() => ({ content: undefined }));
+  if (typeof content !== "string" || !content.trim()) {
+    return c.json({ error: "content required" }, 400);
+  }
+  const now = Date.now();
+  const row = await c.env.DB.prepare(
+    "INSERT INTO memos (title, content, created_at, updated_at) VALUES (?, ?, ?, ?) RETURNING *"
+  )
+    .bind(titleFrom(content), content, now, now)
+    .first();
+  return c.json(row, 201);
+});
+
+// gate everything under /api except the public auth + /api/ext routes
 app.use("/api/*", (c, next) => {
   const p = c.req.path;
-  // /api/login and /api/logout are registered before this middleware, so their
-  // handlers respond first and the gate never actually runs for them — this guard
-  // is a defensive net for any future reordering, hence unreachable under the
-  // current routes and excluded from coverage.
+  // /api/login, /api/logout and the /api/ext/* surface are registered before this
+  // middleware, so their handlers respond first and the gate never actually runs
+  // for them — this guard is a defensive net for any future reordering, hence
+  // unreachable under the current routes and excluded from coverage.
   /* v8 ignore next */
-  if (p === "/api/login" || p === "/api/logout") return next();
+  if (p === "/api/login" || p === "/api/logout" || p.startsWith("/api/ext/")) return next();
   return jwt({ secret: c.env.JWT_SECRET, cookie: COOKIE, alg: "HS256" })(c, next);
 });
 
 app.get("/api/me", (c) => c.json({ ok: true }));
+
+// --- api token management (web app Settings page, JWT-gated) -------------
+// list active tokens (never the hash or plaintext — those are unrecoverable)
+app.get("/api/tokens", async (c) => {
+  const { results } = await c.env.DB.prepare(
+    "SELECT id, label, created_at, last_used_at FROM api_tokens WHERE revoked_at IS NULL ORDER BY created_at DESC"
+  ).all();
+  return c.json(results);
+});
+
+// mint a token — the plaintext is returned exactly once, here, and only the hash
+// is stored. The caller (Settings page) must surface it to the user immediately.
+app.post("/api/tokens", async (c) => {
+  const { label } = await c.req.json<{ label?: string }>().catch(() => ({ label: "" }));
+  const token = newToken();
+  const now = Date.now();
+  const row = await c.env.DB.prepare(
+    "INSERT INTO api_tokens (label, token_hash, created_at) VALUES (?, ?, ?) RETURNING id, label, created_at, last_used_at"
+  )
+    .bind((label ?? "").toString().slice(0, 80), await hashToken(token), now)
+    .first();
+  return c.json({ ...row, token }, 201);
+});
+
+// revoke (soft): the row stays for history, but the token stops authenticating
+app.delete("/api/tokens/:id", async (c) => {
+  await c.env.DB.prepare("UPDATE api_tokens SET revoked_at = ? WHERE id = ?")
+    .bind(Date.now(), c.req.param("id"))
+    .run();
+  return c.json({ ok: true });
+});
 
 // --- memos --------------------------------------------------------------
 function titleFrom(content: string): string {

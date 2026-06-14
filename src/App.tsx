@@ -20,6 +20,7 @@ import {
   byRecent,
 } from "./lib";
 import { useToast, usePreview } from "./hooks";
+import { Settings } from "./Settings";
 import { useImport } from "./useImport";
 
 // public site key (build-time). Empty = widget dormant until keys are configured.
@@ -51,7 +52,7 @@ export default function App() {
   const [loading, setLoading] = useState(true);
   const [memos, setMemos] = useState<MemoMeta[]>([]);
   const [trash, setTrash] = useState<MemoMeta[]>([]);
-  const [view, setView] = useState<"memos" | "trash">("memos");
+  const [view, setView] = useState<"memos" | "trash" | "settings">("memos");
   const [viewing, setViewing] = useState<Memo | null>(null); // trashed memo open in read-only view
   const [query, setQuery] = useState("");
   const [undo, setUndo] = useState<{ id: number; title: string } | null>(null);
@@ -321,6 +322,15 @@ export default function App() {
     }
   }
   openMemoRef.current = openMemo;
+
+  // user-initiated "new memo" (toolbar button / ⌘K): unlike the boot-time
+  // newMemo() calls, this also leaves the Settings/Trash views so the fresh memo
+  // is actually shown. Kept separate so boot doesn't force the view (which would
+  // race with restoring the Trash/Settings tab on load).
+  function newMemoFromUI() {
+    setView("memos");
+    newMemo();
+  }
 
   async function newMemo() {
     await leaveCurrent();
@@ -767,7 +777,7 @@ export default function App() {
       } else if (k === "k") {
         // new memo — newMemo() flushes the in-progress memo first
         e.preventDefault();
-        newMemo();
+        newMemoFromUI();
       }
     }
     window.addEventListener("keydown", onKey);
@@ -883,7 +893,15 @@ export default function App() {
       {sidebar && (
         <aside className="sidebar">
           <div className="side-head">
-            <button onClick={newMemo}>+ New</button>
+            <button
+              className={view === "settings" ? "active" : ""}
+              onClick={() => {
+                setView("settings");
+                setViewing(null);
+              }}
+            >
+              ⚙ Settings
+            </button>
             <button className="ghost" onClick={logout}>
               Logout
             </button>
@@ -909,7 +927,7 @@ export default function App() {
             </button>
           </div>
 
-          {view === "memos" ? (
+          {view === "settings" ? null : view === "memos" ? (
             <>
               <input
                 className="search"
@@ -1028,7 +1046,7 @@ export default function App() {
             >
               ⬆ Folder
             </button>
-            <button className="new-memo" onClick={newMemo} title="New memo (⌘K)">
+            <button className="new-memo" onClick={newMemoFromUI} title="New memo (⌘K)">
               + New
             </button>
           </div>
@@ -1086,7 +1104,9 @@ export default function App() {
           </div>
         )}
 
-        {viewing ? (
+        {view === "settings" ? (
+          <Settings flash={flash} />
+        ) : viewing ? (
           <div className="pane">
             <textarea
               className="editor"

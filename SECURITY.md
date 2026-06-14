@@ -22,8 +22,11 @@ spare time, fixes are best-effort.
 
 ## Design notes
 
-- Single-user app: one hard-coded credential (`AUTH_USER` / `AUTH_PASS`) plus a
-  signed JWT in an httpOnly, `Secure`, `SameSite=Lax` cookie.
+- Single-user app: one credential pair (`AUTH_USER` / `AUTH_PASS`) plus a signed
+  JWT in an httpOnly, `Secure`, `SameSite=Lax` cookie. `AUTH_PASS` is stored as a
+  salted **PBKDF2-HMAC-SHA256** hash (210k iterations), never plaintext — login
+  compares in constant time and fails closed on a non-hash secret. Mint/rotate it
+  with `scripts/hash-password.mjs` (see README → Deploy).
 - Login is gated by Cloudflare Turnstile when `TURNSTILE_SECRET` is configured,
   which blocks automated/distributed brute-force without locking the owner out.
 - Markdown is rendered with `marked`, then **sanitized with DOMPurify** before it

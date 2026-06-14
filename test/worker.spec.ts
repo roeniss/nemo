@@ -1,6 +1,9 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import app from "../worker/index";
+import app, { hashPassword, verifyPassword } from "../worker/index";
 import { D1 } from "./d1";
+
+// AUTH_PASS is stored as a PBKDF2 hash; mint one once for the test password.
+const PW_HASH = await hashPassword("pw");
 
 const SCHEMA = `
 CREATE TABLE memos (
@@ -26,7 +29,7 @@ let env: Record<string, unknown>;
 beforeEach(() => {
   const db = new D1();
   db.exec(SCHEMA);
-  env = { DB: db, AUTH_USER: "tester", AUTH_PASS: "pw", JWT_SECRET: "test-secret" };
+  env = { DB: db, AUTH_USER: "tester", AUTH_PASS: PW_HASH, JWT_SECRET: "test-secret" };
 });
 
 const req = (path: string, init?: RequestInit) => app.request(path, init, env as never);
@@ -60,6 +63,24 @@ describe("auth", () => {
   });
   // Turnstile is skipped here (no TURNSTILE_SECRET in the test env), matching
   // the worker's "enforce only when configured" behaviour.
+});
+
+describe("password hashing", () => {
+  it("mints a salted pbkdf2 string and round-trips", async () => {
+    const h = await hashPassword("hunter2");
+    expect(h).toMatch(/^pbkdf2:210000:/);
+    expect(await verifyPassword("hunter2", h)).toBe(true);
+    expect(await verifyPassword("nope", h)).toBe(false);
+  });
+
+  it("uses a fresh salt per call", async () => {
+    expect(await hashPassword("same")).not.toBe(await hashPassword("same"));
+  });
+
+  it("fails closed on a non-hash (e.g. stale plaintext) secret", async () => {
+    expect(await verifyPassword("pw", "pw")).toBe(false);
+    expect(await verifyPassword("pw", "pbkdf2:210000:bad")).toBe(false);
+  });
 });
 
 describe("memos", () => {

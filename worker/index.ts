@@ -37,6 +37,68 @@ async function hashToken(token: string): Promise<string> {
   return Array.from(new Uint8Array(digest), (b) => b.toString(16).padStart(2, "0")).join("");
 }
 
+// --- login password hashing (PBKDF2-HMAC-SHA256) ------------------------
+// The login password is never stored plaintext: AUTH_PASS holds a salted
+// PBKDF2 hash in the form `pbkdf2:<iters>:<saltB64>:<hashB64>`. bcrypt/argon2
+// aren't available on the Workers runtime, so we use WebCrypto's PBKDF2. The
+// fields are `:`-delimited (not the PHC-conventional `$`) so the value survives
+// dotenv variable-expansion when it lives in .dev.vars — `$` would be mangled.
+// Mint a value with `node scripts/hash-password.mjs`.
+const PBKDF2_ITERS = 210_000; // OWASP 2023 baseline for PBKDF2-HMAC-SHA256
+const PBKDF2_PREFIX = "pbkdf2:";
+
+const b64encode = (bytes: Uint8Array): string =>
+  btoa(String.fromCharCode(...bytes));
+const b64decode = (s: string): Uint8Array<ArrayBuffer> => {
+  const bin = atob(s);
+  const out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+  return out;
+};
+
+async function pbkdf2(password: string, salt: Uint8Array<ArrayBuffer>, iterations: number): Promise<Uint8Array> {
+  const key = await crypto.subtle.importKey(
+    "raw",
+    new TextEncoder().encode(password),
+    "PBKDF2",
+    false,
+    ["deriveBits"]
+  );
+  const bits = await crypto.subtle.deriveBits(
+    { name: "PBKDF2", salt, iterations, hash: "SHA-256" },
+    key,
+    256
+  );
+  return new Uint8Array(bits);
+}
+
+// constant-time byte compare — avoids leaking how many leading bytes matched
+function timingSafeEqual(a: Uint8Array, b: Uint8Array): boolean {
+  if (a.length !== b.length) return false;
+  let diff = 0;
+  for (let i = 0; i < a.length; i++) diff |= a[i] ^ b[i];
+  return diff === 0;
+}
+
+export async function hashPassword(password: string): Promise<string> {
+  const salt = new Uint8Array(16);
+  crypto.getRandomValues(salt);
+  const hash = await pbkdf2(password, salt, PBKDF2_ITERS);
+  return `${PBKDF2_PREFIX}${PBKDF2_ITERS}:${b64encode(salt)}:${b64encode(hash)}`;
+}
+
+// Verify a login attempt against the configured AUTH_PASS, which must be a
+// pbkdf2: hash (mint it with scripts/hash-password.mjs). Anything else — incl.
+// a stale plaintext secret — fails closed.
+export async function verifyPassword(password: string, stored: string): Promise<boolean> {
+  if (!stored.startsWith(PBKDF2_PREFIX)) return false;
+  const [, itersStr, saltB64, hashB64] = stored.split(":");
+  const iterations = Number(itersStr);
+  if (!iterations || !saltB64 || !hashB64) return false;
+  const actual = await pbkdf2(password, b64decode(saltB64), iterations);
+  return timingSafeEqual(actual, b64decode(hashB64));
+}
+
 const app = new Hono<{ Bindings: Bindings }>();
 
 // --- auth ---------------------------------------------------------------
@@ -70,7 +132,7 @@ app.post("/api/login", async (c) => {
     if (!ok) return c.json({ error: "verification failed" }, 403);
   }
 
-  if (username !== c.env.AUTH_USER || password !== c.env.AUTH_PASS) {
+  if (username !== c.env.AUTH_USER || !(await verifyPassword(password, c.env.AUTH_PASS))) {
     return c.json({ error: "invalid credentials" }, 401);
   }
 

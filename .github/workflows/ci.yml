@@ -46,8 +46,11 @@ jobs:
         run: npx playwright install --with-deps chromium
       - name: Write local dev secrets
         run: |
+          # AUTH_PASS must be a PBKDF2 hash of the login password, not plaintext —
+          # the worker fails closed on a non-hash secret.
+          AUTH_PASS_HASH=$(printf '%s' "$TEST_PASS" | node scripts/hash-password.mjs)
           printf 'AUTH_USER=%s\nAUTH_PASS=%s\nJWT_SECRET=%s\n' \
-            "$TEST_USER" "$TEST_PASS" "ci-jwt-secret-not-real" > .dev.vars
+            "$TEST_USER" "$AUTH_PASS_HASH" "ci-jwt-secret-not-real" > .dev.vars
           # short history thresholds so the session-snapshot e2e can cross a
           # "session boundary" with a brief wait instead of the 1h prod default
           printf 'HISTORY_GAP_MS=1000\nHISTORY_SESSION_MS=1000\n' >> .dev.vars

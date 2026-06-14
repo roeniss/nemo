@@ -84,6 +84,12 @@ npm run db:local
 npm run dev          # http://localhost:5173
 ```
 Local credentials live in `.dev.vars` (AUTH_USER / AUTH_PASS / JWT_SECRET).
+`AUTH_PASS` is **not** the plaintext password — it's a salted PBKDF2 hash. Mint one
+(input is read from stdin, so it never hits shell history) and paste it in:
+```bash
+node scripts/hash-password.mjs        # type the password at the hidden prompt
+# → pbkdf2:210000:...   copy this into AUTH_PASS
+```
 
 ## Deploy
 
@@ -93,8 +99,14 @@ Manual deploy from your machine:
 ```bash
 # Register production secrets (once)
 npx wrangler secret put AUTH_USER
-npx wrangler secret put AUTH_PASS
 npx wrangler secret put JWT_SECRET
+
+# AUTH_PASS must be a salted PBKDF2 hash, never plaintext. This pipes the hash
+# straight to the clipboard (stdout), while the hidden password prompt shows on
+# stderr — so the hash never hits the terminal scrollback or shell history.
+# Paste it at wrangler's (masked) prompt:
+node scripts/hash-password.mjs | pbcopy
+npx wrangler secret put AUTH_PASS
 
 # Apply the schema to the remote D1 (once)
 npm run db:remote

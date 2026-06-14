@@ -18,6 +18,8 @@ import {
   readList,
   writeList,
   byRecent,
+  caretLine,
+  centerDelta,
 } from "./lib";
 import { useToast, usePreview } from "./hooks";
 import { useImport } from "./useImport";
@@ -99,17 +101,25 @@ export default function App() {
   currentIdRef.current = currentId;
   const editorRef = useRef<HTMLTextAreaElement>(null);
   const previewRef = useRef<HTMLDivElement>(null);
-  // keep the desktop preview scrolled to match the editor, so typing past the
-  // fold doesn't leave the rendered text stranded out of view (desktop only —
-  // the preview is hidden on mobile, where this is a no-op).
-  function syncPreviewScroll() {
+  // Scroll the desktop preview so the rendered block under the editor caret is
+  // vertically centered — the preview then follows wherever you're typing,
+  // instead of leaving the rendered text stranded out of view. Maps the caret's
+  // source line onto the last rendered block at or before that line (tagged with
+  // data-source-line by usePreview). Desktop-only: the preview is hidden on
+  // mobile, where the querySelectorAll finds nothing and this is a no-op.
+  function syncPreviewToCaret() {
     const ed = editorRef.current;
     const pv = previewRef.current;
     if (!ed || !pv) return;
-    const edMax = ed.scrollHeight - ed.clientHeight;
-    const pvMax = pv.scrollHeight - pv.clientHeight;
-    if (edMax <= 0 || pvMax <= 0) return;
-    pv.scrollTop = (ed.scrollTop / edMax) * pvMax;
+    const line = caretLine(ed.value, ed.selectionStart);
+    let target: HTMLElement | null = null;
+    for (const el of pv.querySelectorAll<HTMLElement>("[data-source-line]")) {
+      if (Number(el.dataset.sourceLine) <= line) target = el;
+      else break;
+    }
+    if (!target) return;
+    const top = target.getBoundingClientRect().top - pv.getBoundingClientRect().top;
+    pv.scrollTop += centerDelta(top, target.clientHeight, pv.clientHeight);
   }
   const focusOnOpen = useRef(false); // focus the editor after the next new memo opens
   const fileRef = useRef<HTMLInputElement>(null); // hidden file picker for text import
@@ -843,10 +853,10 @@ export default function App() {
   // debounced live markdown preview — renders the editor content, or the read-only
   // trash memo when one is open (the editor is hidden in that case)
   const { html } = usePreview(viewing ? viewing.content : content);
-  // the preview is debounced, so a burst of typing grows the editor (and fires
-  // its scroll) while the rendered html — and thus the preview's height — is
-  // still stale. Re-align once the new html lands, or the preview trails behind.
-  useEffect(syncPreviewScroll, [html]);
+  // the preview is debounced, so by the time the new html (and its
+  // data-source-line blocks) lands, the caret has usually moved on. Re-center on
+  // every render so the preview catches up to where the caret now is.
+  useEffect(syncPreviewToCaret, [html]);
   const visibleMemos = useMemo(() => {
     const q = query.trim().toLowerCase();
     return q ? memos.filter((m) => m.title.toLowerCase().includes(q)) : memos;
@@ -1111,7 +1121,7 @@ export default function App() {
               className="editor"
               value={content}
               onChange={(e) => onEdit(e.currentTarget.value)}
-              onScroll={syncPreviewScroll}
+              onSelect={syncPreviewToCaret}
               onPaste={(e) => {
                 // a pasted image is embedded inline as base64; everything else
                 // falls through to the normal text paste

@@ -31,6 +31,17 @@ export function titleFrom(content: string): string {
 // so an untouched new memo is still auto-purged on leave
 export const isBlank = (content: string) => content.replace(/^#+\s*/, "").trim() === "";
 
+// 0-based source line of the caret, used to map the editor position onto the
+// rendered block carrying the matching data-source-line.
+export const caretLine = (value: string, caret: number) =>
+  value.slice(0, caret).split("\n").length - 1;
+
+// how far to scroll a viewport (of viewportH px) so a block at offset `top`
+// within it, of height `blockH`, ends up vertically centered. Returns a delta
+// to add to the current scrollTop; the browser clamps it into range.
+export const centerDelta = (top: number, blockH: number, viewportH: number) =>
+  top - (viewportH - blockH) / 2;
+
 // memo id encoded in the URL hash (#123 / #-123 for temps); null when absent
 export function hashId(): number | null {
   const h = location.hash.replace(/^#/, "");

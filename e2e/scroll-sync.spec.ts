@@ -1,49 +1,62 @@
 import { test, expect } from "./fixtures";
 import { sel, blankMemo } from "./helpers";
 
-// Desktop-only feature: the rendered preview follows the editor's scroll so
-// typing past the fold doesn't strand the rendered text out of view. Unit
-// tests fake scrollHeight/clientHeight (happy-dom doesn't lay out), so this
-// real-layout check is what actually proves scrolling follows.
-test.describe("desktop preview scroll sync", () => {
-  // a long doc so BOTH panes genuinely overflow and have somewhere to scroll
-  const longDoc = "# Title\n\n" + Array.from({ length: 200 }, (_, i) => `line ${i}`).join("\n\n");
+// Desktop-only feature. Unit tests fake getBoundingClientRect (happy-dom doesn't
+// lay out), so this real-layout check is what actually proves (a) the rendered
+// block under the caret gets centered in the preview, and (b) the editor's tall
+// bottom padding lets you scroll past the last line.
+test.describe("desktop preview caret centering", () => {
+  const filler = Array.from({ length: 60 }, (_, i) => `filler line ${i}`).join("\n\n");
+  // MIDMARK sits deep in the doc with plenty of content on both sides, so it can
+  // actually reach the vertical center of the preview.
+  const doc = "# Top\n\n" + filler + "\n\n## MIDMARK\n\n" + filler + "\n\n## ENDMARK\n\nlast";
 
-  function overflow(page: import("@playwright/test").Page) {
-    return page.evaluate(() => {
+  test("centers the rendered block under the editor caret", async ({ page }) => {
+    await blankMemo(page);
+    await page.fill(sel.editor, doc);
+    await expect(page.locator(".preview", { hasText: "MIDMARK" })).toBeVisible();
+
+    // put the caret on the MIDMARK line and notify the editor (onSelect)
+    await page.evaluate(() => {
       const ed = document.querySelector("textarea.editor") as HTMLTextAreaElement;
-      const pv = document.querySelector(".preview") as HTMLElement;
+      const idx = ed.value.indexOf("MIDMARK");
+      ed.focus();
+      ed.setSelectionRange(idx, idx);
+      ed.dispatchEvent(new Event("select", { bubbles: true }));
+    });
+
+    // the MIDMARK block's vertical center should land near the preview's center
+    await expect
+      .poll(async () =>
+        page.evaluate(() => {
+          const pv = document.querySelector(".preview") as HTMLElement;
+          const blocks = Array.from(pv.querySelectorAll<HTMLElement>("[data-source-line]"));
+          const el = blocks.find((b) => b.textContent?.includes("MIDMARK"))!;
+          const pr = pv.getBoundingClientRect();
+          const er = el.getBoundingClientRect();
+          const blockCenter = er.top + er.height / 2 - pr.top;
+          return Math.abs(blockCenter - pv.clientHeight / 2);
+        })
+      )
+      .toBeLessThan(40); // within 40px of dead center
+  });
+
+  test("editor can scroll past the last line (tall bottom padding)", async ({ page }) => {
+    await blankMemo(page);
+    await page.fill(sel.editor, doc);
+
+    const { padBottom, viewportH, edMax } = await page.evaluate(() => {
+      const ed = document.querySelector("textarea.editor") as HTMLTextAreaElement;
       return {
+        padBottom: parseFloat(getComputedStyle(ed).paddingBottom),
+        viewportH: window.innerHeight,
         edMax: ed.scrollHeight - ed.clientHeight,
-        pvMax: pv.scrollHeight - pv.clientHeight,
-        pvFraction: pv.scrollTop / (pv.scrollHeight - pv.clientHeight),
       };
     });
-  }
-
-  test("preview follows the editor to the bottom and back", async ({ page }) => {
-    await blankMemo(page);
-    await page.fill(sel.editor, longDoc);
-    // wait for the debounced preview to render the whole document
-    await expect(page.locator(".preview p").last()).toBeVisible();
-
-    // both panes must actually overflow, else the test proves nothing
-    const before = await overflow(page);
-    expect(before.edMax).toBeGreaterThan(0);
-    expect(before.pvMax).toBeGreaterThan(0);
-
-    // scroll the editor to the top → preview follows back up
-    await page.evaluate(() => {
-      const ed = document.querySelector("textarea.editor") as HTMLTextAreaElement;
-      ed.scrollTop = 0;
-    });
-    await expect.poll(async () => (await overflow(page)).pvFraction).toBeLessThan(0.1);
-
-    // scroll the editor to the bottom → preview follows to (near) its bottom
-    await page.evaluate(() => {
-      const ed = document.querySelector("textarea.editor") as HTMLTextAreaElement;
-      ed.scrollTop = ed.scrollHeight;
-    });
-    await expect.poll(async () => (await overflow(page)).pvFraction).toBeGreaterThan(0.9);
+    // ~50vh of scroll-past-end space below the content
+    expect(padBottom).toBeGreaterThan(viewportH * 0.4);
+    // and that padding is part of the scrollable range, so you can scroll well
+    // beyond where the text ends
+    expect(edMax).toBeGreaterThan(padBottom);
   });
 });

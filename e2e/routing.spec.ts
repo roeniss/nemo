@@ -5,7 +5,7 @@ test.describe("per-memo URL routing", () => {
   test("a fresh visit defaults to a new blank document", async ({ page }) => {
     await page.goto("/");
     await expect(page.locator(sel.editor)).toHaveValue("# ");
-    await expect(page).toHaveURL(/#\d+$/);
+    await expect(page).toHaveURL(/#-?\d+$/); // a fresh blank memo is a local temp (negative id)
   });
 
   test("opening a memo reflects its id in the URL hash", async ({ page, request }) => {

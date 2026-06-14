@@ -27,9 +27,9 @@ test.describe("memo editing", () => {
     // wait for status to settle to Saved
     await expect(page.locator(".status")).toHaveText("Saved");
     const hash = await page.evaluate(() => location.hash);
-    expect(hash).toMatch(/^#\d+$/);
+    expect(hash).toMatch(/^#-?\d+$/); // a local temp until it materializes; content is saved either way
 
-    // reload → content restored from the server for this memo
+    // reload → content restored (from the local draft for a temp, or the server)
     await page.reload();
     await expect(page).toHaveURL(new RegExp(`${hash}$`));
     await expect(editor).toHaveValue(`# ${title}\n\nbody text`);

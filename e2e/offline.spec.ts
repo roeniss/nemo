@@ -10,7 +10,7 @@ async function goOnline(page: import("@playwright/test").Page) {
 }
 
 test.describe("offline", () => {
-  test("creates a local temp memo offline and materializes it on reconnect", async ({
+  test("a new memo stays a local temp and materializes on reconnect", async ({
     page,
     request,
   }) => {
@@ -22,12 +22,18 @@ test.describe("offline", () => {
       await expect(page.locator(sel.editor)).toBeVisible();
       await goOffline(page);
 
-      // new memo offline → local temp (negative id), offline banner
+      // new memo → local temp (negative id). Creating it touches no network, so
+      // there's no offline banner yet (and nothing reaches the server).
       await page.locator(sel.newBtn).click();
-      await expect(page.locator(".status.offline")).toBeVisible();
       await expect(page).toHaveURL(/#-\d+$/); // temp ids are negative
       await page.locator(sel.editor).click();
       await page.keyboard.type(`${body}\n\nwritten while offline`);
+
+      // a materialize attempt fails while offline → the offline banner surfaces,
+      // and the memo is still a local temp
+      await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+      await expect(page.locator(".status.offline")).toBeVisible();
+      await expect(page).toHaveURL(/#-\d+$/);
 
       // reconnect → recover() materializes the temp to a real server memo
       await goOnline(page);

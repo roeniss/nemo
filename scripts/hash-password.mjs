@@ -12,7 +12,7 @@
 //   printf '%s' 'pw' | node scripts/hash-password.mjs    # piped (non-interactive / CI)
 // For local dev, put the printed hash into AUTH_PASS in .dev.vars.
 
-const PBKDF2_ITERS = 210_000;
+const PBKDF2_ITERS = 100_000; // Cloudflare Workers caps PBKDF2 at 100k iterations
 
 // Read the password without echoing it to the terminal. Falls back to reading a
 // piped stream when stdin isn't a TTY (CI, `printf ... | node ...`).

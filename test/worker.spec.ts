@@ -68,7 +68,7 @@ describe("auth", () => {
 describe("password hashing", () => {
   it("mints a salted pbkdf2 string and round-trips", async () => {
     const h = await hashPassword("hunter2");
-    expect(h).toMatch(/^pbkdf2:210000:/);
+    expect(h).toMatch(/^pbkdf2:100000:/);
     expect(await verifyPassword("hunter2", h)).toBe(true);
     expect(await verifyPassword("nope", h)).toBe(false);
   });
@@ -79,7 +79,7 @@ describe("password hashing", () => {
 
   it("fails closed on a non-hash (e.g. stale plaintext) secret", async () => {
     expect(await verifyPassword("pw", "pw")).toBe(false);
-    expect(await verifyPassword("pw", "pbkdf2:210000:bad")).toBe(false);
+    expect(await verifyPassword("pw", "pbkdf2:100000:bad")).toBe(false);
   });
 });
 

@@ -83,4 +83,5 @@ const bits = new Uint8Array(
   )
 );
 const b64 = (b) => Buffer.from(b).toString("base64");
-console.log(`pbkdf2$${PBKDF2_ITERS}$${b64(salt)}$${b64(bits)}`);
+// `:`-delimited (not the PHC `$`) so it survives dotenv expansion in .dev.vars.
+console.log(`pbkdf2:${PBKDF2_ITERS}:${b64(salt)}:${b64(bits)}`);

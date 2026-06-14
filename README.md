@@ -79,7 +79,7 @@ Local credentials live in `.dev.vars` (AUTH_USER / AUTH_PASS / JWT_SECRET).
 (input is read from stdin, so it never hits shell history) and paste it in:
 ```bash
 node scripts/hash-password.mjs        # type the password at the hidden prompt
-# → pbkdf2$210000$...   copy this into AUTH_PASS
+# → pbkdf2:210000:...   copy this into AUTH_PASS
 ```
 
 ## Deploy

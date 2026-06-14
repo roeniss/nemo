@@ -455,11 +455,7 @@ export default function App() {
         clearTimeout(timer.current); // cancel any pending save that would resurrect it
         timer.current = null;
       }
-      try {
-        await api(`/memos/${id}?purge=1`, { method: "DELETE" });
-      } catch {
-        setOffline(true);
-      }
+      // local-first: drop it from the UI immediately, fire the purge in the background
       kv.remove(CONTENT_CACHE + id);
       kv.remove(DRAFT + id);
       setMemos((ms) => ms.filter((x) => x.id !== id));
@@ -469,13 +465,10 @@ export default function App() {
       if (currentId === id) {
         openNeighbourOrClear(id);
       }
+      api(`/memos/${id}?purge=1`, { method: "DELETE" }).catch(() => setOffline(true));
       return;
     }
-    try {
-      await api(`/memos/${id}`, { method: "DELETE" });
-    } catch {
-      setOffline(true);
-    }
+    // local-first: drop it from the UI immediately, fire the delete in the background
     kv.remove(CONTENT_CACHE + id);
     kv.remove(DRAFT + id);
     setMemos((ms) => ms.filter((x) => x.id !== id));
@@ -485,6 +478,7 @@ export default function App() {
     setUndo({ id, title: m?.title || "Untitled" });
     if (undoTimer.current) clearTimeout(undoTimer.current);
     undoTimer.current = setTimeout(() => setUndo(null), 6000);
+    api(`/memos/${id}`, { method: "DELETE" }).catch(() => setOffline(true));
   }
 
   async function undoDelete() {

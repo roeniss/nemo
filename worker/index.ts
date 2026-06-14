@@ -44,7 +44,11 @@ async function hashToken(token: string): Promise<string> {
 // fields are `:`-delimited (not the PHC-conventional `$`) so the value survives
 // dotenv variable-expansion when it lives in .dev.vars — `$` would be mangled.
 // Mint a value with `node scripts/hash-password.mjs`.
-const PBKDF2_ITERS = 210_000; // OWASP 2023 baseline for PBKDF2-HMAC-SHA256
+// Cloudflare Workers caps PBKDF2 at 100k iterations (above that, deriveBits
+// throws NotSupportedError) — so 100k is the ceiling here, not OWASP's higher
+// baseline. verifyPassword reads the iteration count from the stored hash, so
+// old hashes minted at a higher count won't silently re-hash differently.
+const PBKDF2_ITERS = 100_000;
 const PBKDF2_PREFIX = "pbkdf2:";
 
 const b64encode = (bytes: Uint8Array): string =>
@@ -95,8 +99,14 @@ export async function verifyPassword(password: string, stored: string): Promise<
   const [, itersStr, saltB64, hashB64] = stored.split(":");
   const iterations = Number(itersStr);
   if (!iterations || !saltB64 || !hashB64) return false;
-  const actual = await pbkdf2(password, b64decode(saltB64), iterations);
-  return timingSafeEqual(actual, b64decode(hashB64));
+  // Fail closed (not 500) if the stored hash is malformed or asks the runtime
+  // for something it rejects — e.g. an iteration count above the Workers cap.
+  try {
+    const actual = await pbkdf2(password, b64decode(saltB64), iterations);
+    return timingSafeEqual(actual, b64decode(hashB64));
+  } catch {
+    return false;
+  }
 }
 
 const app = new Hono<{ Bindings: Bindings }>();

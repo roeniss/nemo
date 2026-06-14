@@ -161,6 +161,11 @@ export default function App() {
         localStorage.setItem("qm-authed", "1");
         setAuthed(true);
         const list = (await r.json()) as MemoMeta[];
+        // `await` above is a suspension point — if the component unmounted while
+        // it resolved (e.g. a test tore down), re-check before touching state or
+        // reading `location` (hashId), else it throws an unhandled rejection.
+        /* v8 ignore next */
+        if (cancelled) return;
         writeList(LIST_CACHE, list);
         const merged = [...temps, ...list].sort(byRecent);
         setMemos(merged);

@@ -423,12 +423,6 @@ input {
 .markdown {
   line-height: 1.6;
 }
-.markdown h1,
-.markdown h2,
-.markdown h3 {
-  border-bottom: 1px solid var(--border);
-  padding-bottom: 0.2em;
-}
 .markdown pre {
   background: var(--code-bg);
   padding: 12px;

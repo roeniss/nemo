@@ -46,8 +46,9 @@ jobs:
         run: |
           set -euo pipefail
           npm run preview:upload -- --preview-alias "pr-${PR}" 2>&1 | tee upload.log
-          # the alias URL is the only one matching pr-<N>-...workers.dev
-          url="$(grep -oE "https://pr-${PR}-[a-z0-9-]+\.workers\.dev" upload.log | head -n1 || true)"
+          # alias URL format is <alias>-<worker>.<subdomain>.workers.dev — e.g.
+          # https://pr-34-nemo.roeniss2.workers.dev (note the dot before the subdomain)
+          url="$(grep -oE "https://pr-${PR}-[a-z0-9.-]+\.workers\.dev" upload.log | head -n1 || true)"
           if [ -z "$url" ] && [ -n "${WORKERS_SUBDOMAIN:-}" ]; then
             url="https://pr-${PR}-nemo.${WORKERS_SUBDOMAIN}.workers.dev"
           fi

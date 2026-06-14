@@ -446,6 +446,21 @@ describe("toolbar and sidebar", () => {
     await waitFor(() => expect(localStorage.getItem("qm-theme")).toBe("system"));
   });
 
+  it("links the GitHub icon to the repo's pull-requests page", async () => {
+    authedBoot();
+    const { container } = render(<App />);
+    await waitFor(() => expect(container.querySelector(".topbar")).toBeTruthy());
+    const link = container.querySelector("a.github-link") as HTMLAnchorElement | null;
+    expect(link).toBeTruthy();
+    expect(link!.getAttribute("href")).toBe("https://github.com/roeniss/nemo/pulls");
+    expect(link!.getAttribute("target")).toBe("_blank");
+    // no reverse-tabnabbing / referrer leak through the new tab
+    expect(link!.getAttribute("rel")).toContain("noopener");
+    // rendered right next to the theme (colour) toggle, with an inline icon
+    expect(link!.previousElementSibling).toBe(container.querySelector(".theme-toggle"));
+    expect(link!.querySelector("svg")).toBeTruthy();
+  });
+
   it("filters memos with the search box", async () => {
     authedBoot();
     server.seed({ title: "Apple", content: "# Apple" });

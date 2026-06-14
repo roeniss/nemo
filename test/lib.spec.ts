@@ -7,11 +7,15 @@ import {
   centerDelta,
   hashId,
   isBlank,
+  keywordOf,
+  keywordsOf,
   readList,
   titleFrom,
   writeList,
   type MemoMeta,
 } from "../src/lib";
+
+const meta = (title: string): MemoMeta => ({ id: 1, title, updated_at: 0 });
 
 afterEach(() => {
   localStorage.clear();
@@ -54,6 +58,57 @@ describe("titleFrom", () => {
     const long = "a".repeat(200);
     expect(titleFrom(long)).toBe("a".repeat(120));
     expect(titleFrom(long)).toHaveLength(120);
+  });
+});
+
+describe("keywordOf", () => {
+  it("takes the first word", () => {
+    expect(keywordOf("todo - 피아노 고르기")).toBe("todo");
+  });
+  it("stops at hyphens, underscores and dots", () => {
+    expect(keywordOf("learning-rosetta-only-x86-to-arm.md")).toBe("learning");
+    expect(keywordOf("weekly_report_2026")).toBe("weekly");
+  });
+  it("handles a Korean first word", () => {
+    expect(keywordOf("이희승 발표 - is java alive or dead")).toBe("이희승");
+  });
+  it("lowercases", () => {
+    expect(keywordOf("TODO list")).toBe("todo");
+    expect(keywordOf("Learning Rust")).toBe("learning");
+  });
+  it("skips leading punctuation/whitespace", () => {
+    expect(keywordOf("  - hello")).toBe("hello");
+    expect(keywordOf("[draft] spec")).toBe("draft");
+  });
+  it("includes leading digits", () => {
+    expect(keywordOf("2026 goals")).toBe("2026");
+  });
+  it("returns '' when there is no word character", () => {
+    expect(keywordOf("--- ___")).toBe("");
+    expect(keywordOf("")).toBe("");
+  });
+});
+
+describe("keywordsOf", () => {
+  it("returns distinct keywords sorted alphabetically", () => {
+    const got = keywordsOf([meta("todo a"), meta("learning b"), meta("apple c")]);
+    expect(got).toEqual(["apple", "learning", "todo"]);
+  });
+  it("dedupes case-insensitively", () => {
+    expect(keywordsOf([meta("Todo one"), meta("todo two"), meta("TODO three")])).toEqual([
+      "todo",
+    ]);
+  });
+  it("drops memos without a word character", () => {
+    expect(keywordsOf([meta("--- ---"), meta("real one")])).toEqual(["real"]);
+  });
+  it("excludes the 'untitled' placeholder (any casing)", () => {
+    expect(keywordsOf([meta("Untitled"), meta("untitled note"), meta("real one")])).toEqual([
+      "real",
+    ]);
+  });
+  it("returns [] for no memos", () => {
+    expect(keywordsOf([])).toEqual([]);
   });
 });
 

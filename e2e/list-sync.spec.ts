@@ -1,15 +1,15 @@
 import { test, expect } from "./fixtures";
-import { sel, seedMemo, purge, uniq } from "./helpers";
+import { sel, seedMemo, purge, uniq, expectEditor, fillEditor } from "./helpers";
 
 test.describe("list sync", () => {
   test("a stale background sync does not revert a just-saved title", async ({ page, request }) => {
     const id = await seedMemo(request, "# Original\n\nx");
     try {
       await page.goto(`/#${id}`);
-      await expect(page.locator(sel.editor)).toHaveValue("# Original\n\nx");
+      await expectEditor(page, "# Original\n\nx");
 
       // rename (first line = title) and let it save → sidebar shows "Edited"
-      await page.fill(sel.editor, "# Edited\n\nx");
+      await fillEditor(page, "# Edited\n\nx");
       await expect(page.locator(".status")).toHaveText("Saved");
       await expect(page.locator(sel.activeTitle)).toHaveText("Edited");
 
@@ -41,7 +41,7 @@ test.describe("list sync", () => {
     try {
       await page.goto(`/#${id}`);
       // open + revalidate settles loadedAt to the seeded updated_at
-      await expect(page.locator(sel.editor)).toHaveValue(`# ${title}\n\nv1`);
+      await expectEditor(page, `# ${title}\n\nv1`);
 
       // another session edits the body — server updated_at advances past our base.
       // We have NO local draft (we never typed), so the sync is free to adopt it.
@@ -50,7 +50,7 @@ test.describe("list sync", () => {
       // background sync (fired on focus) notices the newer updated_at and reloads
       // the open memo's content into the editor — no banner, no conflict
       await page.evaluate(() => window.dispatchEvent(new Event("focus")));
-      await expect(page.locator(sel.editor)).toHaveValue(`# ${title}\n\nEXTERNAL v2`);
+      await expectEditor(page, `# ${title}\n\nEXTERNAL v2`);
       await expect(page.locator(".conflict")).toHaveCount(0);
     } finally {
       await purge(request, id);

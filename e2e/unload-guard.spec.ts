@@ -1,5 +1,5 @@
 import { test, expect } from "./fixtures";
-import { blankMemo, sel } from "./helpers";
+import { blankMemo, fillEditor } from "./helpers";
 
 // dispatch a real beforeunload event and report whether a handler cancelled it.
 // dispatchEvent returns false iff a listener called preventDefault — which is how
@@ -31,7 +31,7 @@ test.describe("unsaved-changes guard", () => {
       }
     });
 
-    await page.locator(sel.editor).fill("# guard me\n\nunsaved edits");
+    await fillEditor(page, "# guard me\n\nunsaved edits");
     await expect(page.locator(".status")).toHaveText("Saving…");
 
     expect(await unloadIsBlocked(page)).toBe(true);
@@ -40,7 +40,7 @@ test.describe("unsaved-changes guard", () => {
 
   test("allows unload once the memo is saved", async ({ page }) => {
     await blankMemo(page);
-    await page.locator(sel.editor).fill("# all done\n\nsaved content");
+    await fillEditor(page, "# all done\n\nsaved content");
     await expect(page.locator(".status")).toHaveText("Saved");
 
     expect(await unloadIsBlocked(page)).toBe(false);

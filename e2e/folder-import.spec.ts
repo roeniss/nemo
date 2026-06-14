@@ -2,7 +2,7 @@ import { test, expect } from "./fixtures";
 import { writeFileSync, mkdtempSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { sel, purge, blankMemo, uniq } from "./helpers";
+import { sel, purge, blankMemo, uniq, expectEditor } from "./helpers";
 
 type Meta = { id: number; title: string };
 
@@ -32,7 +32,7 @@ test.describe("folder upload", () => {
     await expect(page.locator(".memo-list")).toContainText(beta);
 
     // the open blank memo is untouched by the folder upload
-    await expect(page.locator(sel.editor)).toHaveValue("# ");
+    await expectEditor(page, "# ");
 
     // verify server-side: each file is its own memo, titled by filename, body
     // prefixed with the "# name" heading — and the recursive/binary files are absent
@@ -109,7 +109,7 @@ test.describe("folder upload", () => {
     await page.locator(sel.folderInput).setInputFiles(dir);
 
     await expect(page.locator(sel.toast)).toContainText("등록할 텍스트 파일이 없어요");
-    await expect(page.locator(sel.editor)).toHaveValue("# ");
+    await expectEditor(page, "# ");
   });
 
   test("a folder whose files are all in subfolders registers nothing (non-recursive)", async ({
@@ -125,6 +125,6 @@ test.describe("folder upload", () => {
     await page.locator(sel.folderInput).setInputFiles(dir);
 
     await expect(page.locator(sel.toast)).toContainText("폴더가 비어 있어요");
-    await expect(page.locator(sel.editor)).toHaveValue("# ");
+    await expectEditor(page, "# ");
   });
 });

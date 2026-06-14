@@ -1,10 +1,10 @@
 import { test, expect } from "./fixtures";
-import { sel, seedMemo, purge, uniq } from "./helpers";
+import { seedMemo, purge, uniq, expectEditor } from "./helpers";
 
 test.describe("per-memo URL routing", () => {
   test("a fresh visit defaults to a new blank document", async ({ page }) => {
     await page.goto("/");
-    await expect(page.locator(sel.editor)).toHaveValue("# ");
+    await expectEditor(page, "# ");
     await expect(page).toHaveURL(/#\d+$/);
   });
 
@@ -16,7 +16,7 @@ test.describe("per-memo URL routing", () => {
       await page.reload(); // pick up the seeded memo in the list
       await page.locator(`.memo-title:text-is("${title}")`).click();
       await expect(page).toHaveURL(new RegExp(`#${id}$`));
-      await expect(page.locator(sel.editor)).toHaveValue(`# ${title}\n\nbody`);
+      await expectEditor(page, `# ${title}\n\nbody`);
     } finally {
       await purge(request, id);
     }
@@ -27,10 +27,10 @@ test.describe("per-memo URL routing", () => {
     const id = await seedMemo(request, `# ${title}\n\nkeep me`);
     try {
       await page.goto(`/#${id}`);
-      await expect(page.locator(sel.editor)).toHaveValue(`# ${title}\n\nkeep me`);
+      await expectEditor(page, `# ${title}\n\nkeep me`);
       await page.reload();
       await expect(page).toHaveURL(new RegExp(`#${id}$`));
-      await expect(page.locator(sel.editor)).toHaveValue(`# ${title}\n\nkeep me`);
+      await expectEditor(page, `# ${title}\n\nkeep me`);
     } finally {
       await purge(request, id);
     }
@@ -44,7 +44,7 @@ test.describe("per-memo URL routing", () => {
     // wait for the hash to register (hashchange → openMemo) before the content
     const at = async (id: number, title: string, body: string) => {
       await expect(page).toHaveURL(new RegExp(`#${id}$`));
-      await expect(page.locator(sel.editor)).toHaveValue(`# ${title}\n\n${body}`);
+      await expectEditor(page, `# ${title}\n\n${body}`);
     };
     try {
       await page.goto(`/#${idA}`);

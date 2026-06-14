@@ -2,7 +2,7 @@ import { test, expect } from "./fixtures";
 import { writeFileSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { sel, purge, blankMemo, uniq, editorText } from "./helpers";
+import { sel, purge, blankMemo, uniq } from "./helpers";
 
 let bigPath: string;
 let bigName: string;
@@ -49,7 +49,7 @@ test.describe("IndexedDB content store", () => {
 
     // open the new memo — its large body renders straight from the IDB cache
     await page.goto(`/#${id}`);
-    await expect.poll(() => editorText(page)).toMatch(new RegExp(`^# ${bigName}`));
+    await expect(page.locator(sel.editor)).toHaveValue(new RegExp(`^# ${bigName}`));
 
     // cached in IndexedDB, large, and NOT bloating localStorage
     const cached = await idbGet(page, `qm-cache-${id}`);
@@ -58,7 +58,7 @@ test.describe("IndexedDB content store", () => {
 
     // survives a reload (read back from IDB for instant offline display)
     await page.reload();
-    await expect.poll(() => editorText(page)).toMatch(new RegExp(`^# ${bigName}`));
+    await expect(page.locator(sel.editor)).toHaveValue(new RegExp(`^# ${bigName}`));
 
     expect(errors).toEqual([]); // no uncaught storage errors
     await purge(request, id);

@@ -1,5 +1,4 @@
 import { type Memo, type MemoMeta, api, byRecent, titleFrom, CONTENT_CACHE } from "./lib";
-import { type EditorHandle } from "./Editor";
 import { kv } from "./idb";
 
 // text file extensions — used alongside the MIME type and a NUL-byte sniff to keep binaries out
@@ -10,7 +9,7 @@ const IMAGE_MAX_BYTES = 1024 * 1024; // 1 MB — paste a larger image and we rej
 type ImportDeps = {
   content: string;
   currentIdRef: { current: number | null };
-  editorRef: { current: EditorHandle | null };
+  editorRef: { current: HTMLTextAreaElement | null };
   onEdit: (value: string) => void;
   flash: (msg: string) => void;
   setMemos: (updater: (m: MemoMeta[]) => MemoMeta[]) => void;
@@ -108,14 +107,24 @@ export function useImport({ content, currentIdRef, editorRef, onEdit, flash, set
     return null;
   }
 
-  // insert a snippet at the editor caret. The editor (CM) reads its own live doc
-  // as the source of truth and routes the edit back through onChange→onEdit, so
-  // it autosaves exactly like typing; it also restores the caret after the text.
-  // The fallback covers the editor being unmounted (no open memo).
+  // insert a snippet at the editor caret, routed through onEdit so it autosaves
+  // exactly like typing; restore the caret just after the inserted text. Reads
+  // the live textarea value (source of truth) so a stale closure can't clobber edits.
   function insertAtCursor(snippet: string) {
     const el = editorRef.current;
-    if (el) el.insertAtCursor(snippet);
-    else onEdit(content + snippet);
+    const base = el ? el.value : content;
+    const start = el ? el.selectionStart : base.length;
+    const end = el ? el.selectionEnd : base.length;
+    const next = base.slice(0, start) + snippet + base.slice(end);
+    const caret = start + snippet.length;
+    onEdit(next);
+    requestAnimationFrame(() => {
+      const e2 = editorRef.current;
+      if (e2) {
+        e2.focus();
+        e2.setSelectionRange(caret, caret);
+      }
+    });
   }
 
   // cmd+v of an image: size-check, then base64-encode and embed it at the caret

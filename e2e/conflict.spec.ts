@@ -1,5 +1,5 @@
 import { test, expect } from "./fixtures";
-import { sel, seedMemo, purge, uniq, expectEditor } from "./helpers";
+import { sel, seedMemo, purge, uniq } from "./helpers";
 
 test.describe("multi-session conflict", () => {
   test("editing a memo changed elsewhere shows a banner; Reload adopts the server copy", async ({
@@ -10,20 +10,20 @@ test.describe("multi-session conflict", () => {
     const id = await seedMemo(request, `# ${title}\n\nv1`);
     try {
       await page.goto(`/#${id}`);
-      await expectEditor(page, `# ${title}\n\nv1`);
+      await expect(page.locator(sel.editor)).toHaveValue(`# ${title}\n\nv1`);
 
       // another session changes it → server updated_at advances past our base
       await request.put(`/api/memos/${id}`, { data: { content: `# ${title}\n\nEXTERNAL v2` } });
 
       // our local edit autosaves with the stale base → 409 → conflict banner
       await page.locator(sel.editor).click();
-      await page.keyboard.insertText(" local");
+      await page.keyboard.type(" local");
       const banner = page.locator(".conflict", { hasText: "changed in another session" });
       await expect(banner).toBeVisible();
 
       await banner.locator("button", { hasText: "Reload" }).click();
       await expect(banner).toBeHidden();
-      await expectEditor(page, `# ${title}\n\nEXTERNAL v2`);
+      await expect(page.locator(sel.editor)).toHaveValue(`# ${title}\n\nEXTERNAL v2`);
     } finally {
       await purge(request, id);
     }
@@ -34,12 +34,12 @@ test.describe("multi-session conflict", () => {
     const id = await seedMemo(request, `# ${title}\n\nv1`);
     try {
       await page.goto(`/#${id}`);
-      await expectEditor(page, `# ${title}\n\nv1`);
+      await expect(page.locator(sel.editor)).toHaveValue(`# ${title}\n\nv1`);
       await request.put(`/api/memos/${id}`, { data: { content: `# ${title}\n\nEXTERNAL v2` } });
 
       await page.locator(sel.editor).click();
       await page.keyboard.press("ControlOrMeta+End");
-      await page.keyboard.insertText(" LOCAL-WINS");
+      await page.keyboard.type(" LOCAL-WINS");
       const banner = page.locator(".conflict", { hasText: "changed in another session" });
       await expect(banner).toBeVisible();
 
@@ -67,7 +67,7 @@ test.describe("multi-session conflict", () => {
     const id = await seedMemo(request, `# ${title}\n\nv1`);
     try {
       await page.goto(`/#${id}`);
-      await expectEditor(page, `# ${title}\n\nv1`);
+      await expect(page.locator(sel.editor)).toHaveValue(`# ${title}\n\nv1`);
 
       // the next save reaches and COMMITS on the server, but the browser sees a
       // network failure — so loadedAt stays stale though updated_at advanced.
@@ -85,7 +85,7 @@ test.describe("multi-session conflict", () => {
 
       await page.locator(sel.editor).click();
       await page.keyboard.press("ControlOrMeta+End");
-      await page.keyboard.insertText(" first");
+      await page.keyboard.type(" first");
       // the dropped-but-committed write lands on the server
       await expect
         .poll(async () => ((await (await request.get(`/api/memos/${id}`)).json()) as { content: string }).content)
@@ -93,7 +93,7 @@ test.describe("multi-session conflict", () => {
 
       // keep editing: this save sends the now-stale base → the server 409s
       // against our OWN committed write. It must re-base and save, NOT nag.
-      await page.keyboard.insertText(" second");
+      await page.keyboard.type(" second");
       await expect
         .poll(async () => ((await (await request.get(`/api/memos/${id}`)).json()) as { content: string }).content)
         .toContain("second");

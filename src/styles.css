@@ -298,45 +298,6 @@ input {
   background: var(--surface-2);
   cursor: default;
 }
-/* CodeMirror editor host — mirrors the .editor textarea layout, with the type
-   styles pushed onto .cm-scroller / .cm-content where CM renders the text */
-.editor-cm {
-  width: 50%;
-  min-height: 0;
-  overflow: hidden;
-  border-right: 1px solid var(--border);
-}
-.editor-cm .cm-editor {
-  height: 100%;
-  background: var(--bg);
-}
-.editor-cm .cm-editor.cm-focused {
-  outline: none; /* CM draws its own focus ring; we don't want it */
-}
-.editor-cm .cm-scroller {
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 16px; /* >=16px avoids iOS zoom-on-focus */
-  line-height: 1.6;
-}
-.editor-cm .cm-content {
-  /* the tall bottom padding lets the last line scroll up off the bottom edge,
-     so writing at the end of a long memo isn't cramped against the floor */
-  padding: 20px 20px 50vh;
-  color: var(--fg);
-  caret-color: var(--fg);
-}
-/* drawSelection() renders every caret/selection itself (needed for multi-cursor),
-   so these style the drawn carets and selection bands rather than native ones */
-.editor-cm .cm-cursor {
-  border-left-color: var(--fg);
-}
-.editor-cm .cm-selectionBackground {
-  background: var(--accent);
-  opacity: 0.25;
-}
-.editor-cm .cm-focused .cm-selectionBackground {
-  opacity: 0.35;
-}
 .preview {
   width: 50%;
   padding: 20px;
@@ -508,8 +469,7 @@ input {
   .preview {
     display: none;
   }
-  .editor,
-  .editor-cm {
+  .editor {
     width: 100%;
     border-right: none;
   }

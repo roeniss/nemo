@@ -1,5 +1,5 @@
 import { test, expect } from "./fixtures";
-import { sel, seedMemo, purge, uniq } from "./helpers";
+import { sel, seedMemo, purge, uniq, expectEditor } from "./helpers";
 
 test.describe("Alt+J / Alt+K memo navigation", () => {
   test("moves to next/previous and clamps at the ends", async ({ page, request }) => {
@@ -15,7 +15,7 @@ test.describe("Alt+J / Alt+K memo navigation", () => {
     // settle on a memo fully (editor content loaded) before the next keypress, so a
     // press can't race the previous openMemo's async tail
     const settled = async (title: string, body: string) => {
-      await expect(page.locator(sel.editor)).toHaveValue(`# ${title}\n\n${body}`);
+      await expectEditor(page, `# ${title}\n\n${body}`);
       await expect(page.locator(sel.activeTitle)).toHaveText(title);
     };
     try {
@@ -50,9 +50,9 @@ test.describe("Alt+J / Alt+K memo navigation", () => {
     try {
       await page.goto(`/#${idB}`);
       await expect(page.locator(sel.activeTitle)).toHaveText(b);
-      await expect(page.locator(sel.editor)).toHaveValue(`# ${b}\n\nb`);
+      await expectEditor(page, `# ${b}\n\nb`);
 
-      await page.locator(sel.editor).click(); // focus the textarea
+      await page.locator(sel.editor).click(); // focus the editor
       await page.keyboard.down("Alt");
       await page.keyboard.press("KeyJ");
       await page.keyboard.up("Alt");

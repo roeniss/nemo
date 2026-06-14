@@ -4,6 +4,7 @@ import { render, fireEvent, waitFor, cleanup, act } from "@testing-library/preac
 import App from "../src/App";
 import { kv, hydrate } from "../src/idb";
 import { DRAFT, CONTENT_CACHE, TEMPS_KEY, LIST_CACHE } from "../src/lib";
+import { editorEl, editorContent, editorValue, setEditor, caretAt } from "./cm";
 
 // ---------------------------------------------------------------------------
 // In-memory fake server keyed by url + method. Holds memos/trash and responds
@@ -292,7 +293,7 @@ describe("authed boot", () => {
     const { container } = render(<App />);
     await waitFor(() => expect(container.querySelectorAll(".memo-list li").length).toBeGreaterThanOrEqual(2));
     // a new memo was POSTed → editor open with NEW_DOC
-    await waitFor(() => expect(container.querySelector("textarea.editor")).toBeTruthy());
+    await waitFor(() => expect(editorEl(container)).toBeTruthy());
     expect(container.querySelector(".memo-title")?.textContent).toBeTruthy();
   });
 
@@ -302,7 +303,7 @@ describe("authed boot", () => {
     location.hash = "#" + row.id;
     const { container } = render(<App />);
     await waitFor(() =>
-      expect((container.querySelector("textarea.editor") as HTMLTextAreaElement)?.value).toContain("Target")
+      expect(editorValue(container)).toContain("Target")
     );
   });
 });
@@ -317,11 +318,10 @@ describe("editing and save", () => {
     const row = server.seed({ title: "Edit", content: "# Edit" });
     location.hash = "#" + row.id;
     const { container } = render(<App />);
-    await vi.waitFor(() => expect(container.querySelector("textarea.editor")).toBeTruthy());
+    await vi.waitFor(() => expect(editorEl(container)).toBeTruthy());
 
-    const ta = container.querySelector("textarea.editor") as HTMLTextAreaElement;
     await act(async () => {
-      fireEvent.input(ta, { target: { value: "# Edit\n\nhello world" } });
+      setEditor(container, "# Edit\n\nhello world");
     });
     await act(async () => {
       await vi.advanceTimersByTimeAsync(2500);
@@ -341,22 +341,21 @@ describe("editing and save", () => {
     const row = server.seed({ title: "Conf", content: "# Conf" });
     location.hash = "#" + row.id;
     const { container } = render(<App />);
-    await waitFor(() => expect(container.querySelector("textarea.editor")).toBeTruthy());
+    await waitFor(() => expect(editorEl(container)).toBeTruthy());
 
     server.opts.putStatus = 409;
-    const ta = container.querySelector("textarea.editor") as HTMLTextAreaElement;
-    fireEvent.input(ta, { target: { value: "# Conf\n\nlocal edit" } });
+    setEditor(container, "# Conf\n\nlocal edit");
     await waitFor(() => expect(container.querySelector(".conflict")).toBeTruthy());
 
     // Reload pulls server content
     server.opts.putStatus = 0;
     row.content = "# Conf\n\nserver wins";
     fireEvent.click(container.querySelector(".conflict button")!); // Reload
-    await waitFor(() => expect(ta.value).toContain("server wins"));
+    await waitFor(() => expect(editorValue(container)).toContain("server wins"));
 
     // trigger conflict again to test Overwrite
     server.opts.putStatus = 409;
-    fireEvent.input(ta, { target: { value: "# Conf\n\nmine again" } });
+    setEditor(container, "# Conf\n\nmine again");
     await waitFor(() => expect(container.querySelector(".conflict")).toBeTruthy());
     server.opts.putStatus = 0;
     const buttons = container.querySelectorAll(".conflict button");
@@ -369,11 +368,10 @@ describe("editing and save", () => {
     const row = server.seed({ title: "Del", content: "# Del" });
     location.hash = "#" + row.id;
     const { container } = render(<App />);
-    await waitFor(() => expect(container.querySelector("textarea.editor")).toBeTruthy());
+    await waitFor(() => expect(editorEl(container)).toBeTruthy());
 
     server.opts.putStatus = 404;
-    const ta = container.querySelector("textarea.editor") as HTMLTextAreaElement;
-    fireEvent.input(ta, { target: { value: "# Del\n\nrescue me" } });
+    setEditor(container, "# Del\n\nrescue me");
     await waitFor(() => {
       const banner = container.querySelector(".conflict span");
       expect(banner?.textContent).toContain("다른 곳에서 삭제");
@@ -385,7 +383,7 @@ describe("editing and save", () => {
     fireEvent.click(btns[0]);
     await waitFor(() => expect(container.querySelector(".conflict")).toBeFalsy());
     await waitFor(() =>
-      expect((container.querySelector("textarea.editor") as HTMLTextAreaElement)?.value).toContain("rescue")
+      expect(editorValue(container)).toContain("rescue")
     );
     // a new server memo holds the rescued content
     await waitFor(() => expect(server.memos.some((m) => m.content.includes("rescue me"))).toBe(true));
@@ -396,11 +394,10 @@ describe("editing and save", () => {
     const row = server.seed({ title: "Del2", content: "# Del2" });
     location.hash = "#" + row.id;
     const { container } = render(<App />);
-    await waitFor(() => expect(container.querySelector("textarea.editor")).toBeTruthy());
+    await waitFor(() => expect(editorEl(container)).toBeTruthy());
 
     server.opts.putStatus = 404;
-    const ta = container.querySelector("textarea.editor") as HTMLTextAreaElement;
-    fireEvent.input(ta, { target: { value: "# Del2\n\nbye" } });
+    setEditor(container, "# Del2\n\nbye");
     await waitFor(() => expect(container.querySelector(".conflict span")?.textContent).toContain("삭제"));
 
     const btns = container.querySelectorAll(".conflict button");
@@ -561,13 +558,9 @@ describe("delete and undo", () => {
 
     // list is [C, B, A]; open the middle one and delete it → below = A
     await openRow(container as unknown as HTMLElement, "B");
-    await waitFor(() =>
-      expect((container.querySelector("textarea.editor") as HTMLTextAreaElement)?.value).toContain("bbb")
-    );
+    await waitFor(() => expect(editorValue(container)).toContain("bbb"));
     await delRow(container as unknown as HTMLElement, "B");
-    await waitFor(() =>
-      expect((container.querySelector("textarea.editor") as HTMLTextAreaElement)?.value).toContain("aaa")
-    );
+    await waitFor(() => expect(editorValue(container)).toContain("aaa"));
     expect(container.querySelector(".memo-list li.active .memo-title")?.textContent).toBe("A");
   });
 
@@ -581,13 +574,9 @@ describe("delete and undo", () => {
 
     // list is [C, B, A]; open the last one (no row below) and delete it → above = B
     await openRow(container as unknown as HTMLElement, "A");
-    await waitFor(() =>
-      expect((container.querySelector("textarea.editor") as HTMLTextAreaElement)?.value).toContain("aaa")
-    );
+    await waitFor(() => expect(editorValue(container)).toContain("aaa"));
     await delRow(container as unknown as HTMLElement, "A");
-    await waitFor(() =>
-      expect((container.querySelector("textarea.editor") as HTMLTextAreaElement)?.value).toContain("bbb")
-    );
+    await waitFor(() => expect(editorValue(container)).toContain("bbb"));
     expect(container.querySelector(".memo-list li.active .memo-title")?.textContent).toBe("B");
   });
 });
@@ -601,10 +590,11 @@ describe("keyboard shortcuts", () => {
     const row = server.seed({ title: "Keys", content: "# Keys" });
     location.hash = "#" + row.id;
     const { container } = render(<App />);
-    await waitFor(() => expect(container.querySelector("textarea.editor")).toBeTruthy());
+    await waitFor(() => expect(editorEl(container)).toBeTruthy());
 
-    const ta = container.querySelector("textarea.editor") as HTMLTextAreaElement;
-    fireEvent.input(ta, { target: { value: "# Keys\n\nsaved by shortcut" } });
+    await act(async () => {
+      setEditor(container, "# Keys\n\nsaved by shortcut");
+    });
     fireEvent.keyDown(window, { key: "s", metaKey: true });
     await waitFor(() => expect(row.content).toContain("saved by shortcut"));
 
@@ -645,14 +635,13 @@ describe("offline temp flows", () => {
     // doesn't no-op on a null currentId.
     await waitFor(() => expect(container.querySelector(".status.offline")).toBeTruthy());
     await waitFor(() => {
-      expect(container.querySelector("textarea.editor")).toBeTruthy();
+      expect(editorEl(container)).toBeTruthy();
       expect(JSON.parse(localStorage.getItem(TEMPS_KEY) || "[]").length).toBeGreaterThan(0);
     });
 
     // type content into the temp so it's not blank (so it materializes)
-    const ta = container.querySelector("textarea.editor") as HTMLTextAreaElement;
     await act(async () => {
-      fireEvent.input(ta, { target: { value: "# Temp\n\nreal content" } });
+      setEditor(container, "# Temp\n\nreal content");
     });
     await waitFor(
       () => expect(JSON.parse(localStorage.getItem(TEMPS_KEY) || "[]")[0]?.title).toBe("Temp"),
@@ -687,7 +676,7 @@ describe("background sync via focus", () => {
     location.hash = "#" + row.id;
     const { container } = render(<App />);
     await waitFor(() =>
-      expect((container.querySelector("textarea.editor") as HTMLTextAreaElement)?.value).toContain("original")
+      expect(editorValue(container)).toContain("original")
     );
 
     // change the memo "elsewhere"
@@ -697,7 +686,7 @@ describe("background sync via focus", () => {
       window.dispatchEvent(new Event("focus"));
     });
     await waitFor(() =>
-      expect((container.querySelector("textarea.editor") as HTMLTextAreaElement)?.value).toContain("remote update")
+      expect(editorValue(container)).toContain("remote update")
     );
   });
 
@@ -706,7 +695,7 @@ describe("background sync via focus", () => {
     const row = server.seed({ title: "Gone", content: "# Gone" });
     location.hash = "#" + row.id;
     const { container } = render(<App />);
-    await waitFor(() => expect(container.querySelector("textarea.editor")).toBeTruthy());
+    await waitFor(() => expect(editorEl(container)).toBeTruthy());
 
     // remove it from the server entirely (drops from list + 404 on direct fetch)
     const i = server.memos.indexOf(row);
@@ -725,7 +714,7 @@ describe("beforeunload", () => {
   it("purges an empty fresh memo on unload", async () => {
     authedBoot();
     const { container } = render(<App />);
-    await waitFor(() => expect(container.querySelector("textarea.editor")).toBeTruthy());
+    await waitFor(() => expect(editorEl(container)).toBeTruthy());
     // boot created a fresh empty memo → unload should DELETE?purge=1
     await act(async () => {
       window.dispatchEvent(new Event("beforeunload"));
@@ -744,10 +733,9 @@ describe("beforeunload", () => {
     const row = server.seed({ title: "Unsaved", content: "# Unsaved" });
     location.hash = "#" + row.id;
     const { container } = render(<App />);
-    await vi.waitFor(() => expect(container.querySelector("textarea.editor")).toBeTruthy());
-    const ta = container.querySelector("textarea.editor") as HTMLTextAreaElement;
+    await vi.waitFor(() => expect(editorEl(container)).toBeTruthy());
     await act(async () => {
-      fireEvent.input(ta, { target: { value: "# Unsaved\n\npending edit" } });
+      setEditor(container, "# Unsaved\n\npending edit");
     });
     // debounce hasn't fired yet → timer.current != null
     const evt = new Event("beforeunload", { cancelable: true }) as BeforeUnloadEvent;
@@ -774,7 +762,7 @@ describe("import, download, paste, drop", () => {
     vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:x");
     vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => {});
     const { container } = render(<App />);
-    await waitFor(() => expect(container.querySelector("textarea.editor")).toBeTruthy());
+    await waitFor(() => expect(editorEl(container)).toBeTruthy());
     const dl = container.querySelector(".download") as HTMLButtonElement;
     expect(dl.disabled).toBe(false);
     fireEvent.click(dl);
@@ -829,8 +817,7 @@ describe("import, download, paste, drop", () => {
     const row = server.seed({ title: "Pd", content: "# Pd" });
     location.hash = "#" + row.id;
     const { container } = render(<App />);
-    await waitFor(() => expect(container.querySelector("textarea.editor")).toBeTruthy());
-    const ta = container.querySelector("textarea.editor") as HTMLTextAreaElement;
+    await waitFor(() => expect(editorEl(container)).toBeTruthy());
 
     // paste an image
     const img = new File([new Uint8Array([1, 2, 3])], "pic.png", { type: "image/png" });
@@ -839,10 +826,10 @@ describe("import, download, paste, drop", () => {
       items: [],
     } as unknown as DataTransfer;
     await act(async () => {
-      fireEvent.paste(ta, { clipboardData: clip });
+      fireEvent.paste(editorContent(container), { clipboardData: clip });
     });
     await waitFor(
-      () => expect((container.querySelector("textarea.editor") as HTMLTextAreaElement).value).toContain("data:"),
+      () => expect(editorValue(container)).toContain("data:"),
       { timeout: 3000 }
     );
 
@@ -850,8 +837,8 @@ describe("import, download, paste, drop", () => {
     const dropFile = new File(["# dropped\n\ndropped body"], "drop.md", { type: "text/markdown" });
     const dt = { files: [dropFile], types: ["Files"] } as unknown as DataTransfer;
     await act(async () => {
-      fireEvent.dragOver(ta, { dataTransfer: dt });
-      fireEvent.drop(ta, { dataTransfer: dt });
+      fireEvent.dragOver(editorContent(container), { dataTransfer: dt });
+      fireEvent.drop(editorContent(container), { dataTransfer: dt });
     });
     await waitFor(() => expect(server.memos.some((m) => m.content.includes("dropped body"))).toBe(true));
   });
@@ -884,7 +871,7 @@ describe("offline boot", () => {
     const { container } = render(<App />);
     await waitFor(() => expect(container.querySelector(".status.offline")).toBeTruthy());
     await waitFor(() =>
-      expect((container.querySelector("textarea.editor") as HTMLTextAreaElement)?.value).toContain("cached body")
+      expect(editorValue(container)).toContain("cached body")
     );
   });
 });
@@ -927,7 +914,7 @@ describe("extra branches", () => {
       window.dispatchEvent(new HashChangeEvent("hashchange"));
     });
     await waitFor(() =>
-      expect((container.querySelector("textarea.editor") as HTMLTextAreaElement)?.value).toContain("alpha body")
+      expect(editorValue(container)).toContain("alpha body")
     );
   });
 
@@ -936,7 +923,7 @@ describe("extra branches", () => {
     const row = server.seed({ title: "On", content: "# On" });
     location.hash = "#" + row.id;
     const { container } = render(<App />);
-    await waitFor(() => expect(container.querySelector("textarea.editor")).toBeTruthy());
+    await waitFor(() => expect(editorEl(container)).toBeTruthy());
     // leave a draft so recover() pushes it
     kv.set(DRAFT + row.id, "# On\n\nrecovered via online");
     await act(async () => {
@@ -974,12 +961,11 @@ describe("extra branches", () => {
     const row = server.seed({ title: "Big", content: "# Big" });
     location.hash = "#" + row.id;
     const { container } = render(<App />);
-    await waitFor(() => expect(container.querySelector("textarea.editor")).toBeTruthy());
-    const ta = container.querySelector("textarea.editor") as HTMLTextAreaElement;
+    await waitFor(() => expect(editorEl(container)).toBeTruthy());
     const big = new File([new Uint8Array(2 * 1024 * 1024)], "huge.png", { type: "image/png" });
     const clip = { files: [big], items: [] } as unknown as DataTransfer;
     await act(async () => {
-      fireEvent.paste(ta, { clipboardData: clip });
+      fireEvent.paste(editorContent(container), { clipboardData: clip });
     });
     await waitFor(() => expect(container.querySelector(".toast")?.textContent).toContain("너무 커요"));
   });
@@ -989,16 +975,15 @@ describe("extra branches", () => {
     const row = server.seed({ title: "Txt", content: "# Txt" });
     location.hash = "#" + row.id;
     const { container } = render(<App />);
-    await waitFor(() => expect(container.querySelector("textarea.editor")).toBeTruthy());
-    const ta = container.querySelector("textarea.editor") as HTMLTextAreaElement;
-    const before = ta.value;
+    await waitFor(() => expect(editorEl(container)).toBeTruthy());
+    const before = editorValue(container);
     const clip = { files: [], items: [] } as unknown as DataTransfer;
     // pasteImage returns false (no image) so the handler does nothing — the
     // editor value is unchanged (the browser would handle the text paste natively)
     await act(async () => {
-      fireEvent.paste(ta, { clipboardData: clip });
+      fireEvent.paste(editorContent(container), { clipboardData: clip });
     });
-    expect((container.querySelector("textarea.editor") as HTMLTextAreaElement).value).toBe(before);
+    expect(editorValue(container)).toBe(before);
   });
 
   it("clears the editor when the open memo is deleted from the list", async () => {
@@ -1007,7 +992,7 @@ describe("extra branches", () => {
     location.hash = "#" + row.id;
     const { container } = render(<App />);
     await waitFor(() =>
-      expect((container.querySelector("textarea.editor") as HTMLTextAreaElement)?.value).toContain("body")
+      expect(editorValue(container)).toContain("body")
     );
     // delete the currently-open memo via its × — currentId === id, so the editor
     // resets to the center placeholder (App.tsx setCurrentId(null)/setContent(""))
@@ -1017,7 +1002,7 @@ describe("extra branches", () => {
     await act(async () => {
       fireEvent.click(li.querySelector(".del")!);
     });
-    await waitFor(() => expect(container.querySelector("textarea.editor")).toBeFalsy());
+    await waitFor(() => expect(editorEl(container)).toBeFalsy());
     expect(container.querySelector(".center")).toBeTruthy();
   });
 
@@ -1049,19 +1034,18 @@ describe("extra branches", () => {
     authedBoot();
     const { container } = render(<App />);
     // no hash → boot creates a fresh blank memo ("# ") tracked in freshIds
-    await waitFor(() => expect(container.querySelector("textarea.editor")).toBeTruthy());
-    const ta = container.querySelector("textarea.editor") as HTMLTextAreaElement;
+    await waitFor(() => expect(editorEl(container)).toBeTruthy());
     // an edit that stays blank arms the debounced save (timer.current set) without
     // marking the memo non-fresh
     await act(async () => {
-      fireEvent.input(ta, { target: { value: "#   " } });
+      setEditor(container, "#   ");
     });
     // leave immediately via + New: leaveCurrent sees fresh + blank + a pending
     // timer and clears it (App.tsx clearTimeout/timer.current = null), then purges
     await act(async () => {
       fireEvent.click(container.querySelector(".new-memo")!);
     });
-    await waitFor(() => expect(container.querySelector("textarea.editor")).toBeTruthy());
+    await waitFor(() => expect(editorEl(container)).toBeTruthy());
     // the purge DELETE ?purge=1 was issued for the abandoned blank memo
     await waitFor(() =>
       expect(
@@ -1125,14 +1109,13 @@ describe("flush with a pending timer", () => {
     location.hash = "#" + a.id;
     const { container } = render(<App />);
     await waitFor(() =>
-      expect((container.querySelector("textarea.editor") as HTMLTextAreaElement)?.value).toContain("alpha")
+      expect(editorValue(container)).toContain("alpha")
     );
 
     // type into the (non-fresh) opened memo to arm timer.current, but DON'T let the
     // debounce fire; then open another memo → leaveCurrent → flush() with timer set
-    const ta = container.querySelector("textarea.editor") as HTMLTextAreaElement;
     await act(async () => {
-      fireEvent.input(ta, { target: { value: "# Aaa\n\nalpha edited inflight" } });
+      setEditor(container, "# Aaa\n\nalpha edited inflight");
     });
     const li = Array.from(container.querySelectorAll(".memo-list li")).find(
       (el) => el.querySelector(".memo-title")?.textContent === "Bbb"
@@ -1178,7 +1161,7 @@ describe("openMemo temp + draft branches", () => {
     });
     // draft beats cache → DRAFT shown instantly; id<0 → early return, no per-memo GET
     await waitFor(() =>
-      expect((container.querySelector("textarea.editor") as HTMLTextAreaElement)?.value).toContain("draft-only body")
+      expect(editorValue(container)).toContain("draft-only body")
     );
     expect(memoGets()).toBe(before);
   });
@@ -1271,16 +1254,15 @@ describe("save serialization on a temp with siblings", () => {
     kv.set(DRAFT + -56, "# Sibling\n\nsibling body");
     location.hash = "#-55";
     const { container } = render(<App />);
-    await waitFor(() => expect(container.querySelector("textarea.editor")).toBeTruthy());
+    await waitFor(() => expect(editorEl(container)).toBeTruthy());
     await waitFor(() => {
       const titles = Array.from(container.querySelectorAll(".memo-title")).map((e) => e.textContent);
       expect(titles).toContain("Sibling");
     });
 
     // type into the open temp (-55) → save() updates ONLY -55, mapping past -56
-    const ta = container.querySelector("textarea.editor") as HTMLTextAreaElement;
     await act(async () => {
-      fireEvent.input(ta, { target: { value: "# Renamed temp\n\nbody" } });
+      setEditor(container, "# Renamed temp\n\nbody");
     });
     await waitFor(() => {
       const temps = JSON.parse(localStorage.getItem(TEMPS_KEY) || "[]");
@@ -1298,12 +1280,11 @@ describe("onEdit guard while a banner is up", () => {
     const row = server.seed({ title: "Guard", content: "# Guard" });
     location.hash = "#" + row.id;
     const { container } = render(<App />);
-    await waitFor(() => expect(container.querySelector("textarea.editor")).toBeTruthy());
+    await waitFor(() => expect(editorEl(container)).toBeTruthy());
 
     server.opts.putStatus = 409;
-    const ta = container.querySelector("textarea.editor") as HTMLTextAreaElement;
     await act(async () => {
-      fireEvent.input(ta, { target: { value: "# Guard\n\nmine" } });
+      setEditor(container, "# Guard\n\nmine");
     });
     await waitFor(() => expect(container.querySelector(".conflict")).toBeTruthy());
     // let any debounced PUT from the first edit fully settle so the count is stable
@@ -1317,7 +1298,7 @@ describe("onEdit guard while a banner is up", () => {
       ).length;
     const before = puts();
     await act(async () => {
-      fireEvent.input(ta, { target: { value: "# Guard\n\nmine more typing" } });
+      setEditor(container, "# Guard\n\nmine more typing");
     });
     await new Promise((r) => setTimeout(r, 100));
     // no additional PUT was issued by the guarded edit; the banner is still up
@@ -1335,12 +1316,11 @@ describe("overwrite success", () => {
     location.hash = "#" + row.id;
     const { container } = render(<App />);
     await waitFor(() =>
-      expect((container.querySelector("textarea.editor") as HTMLTextAreaElement)?.value).toContain("base")
+      expect(editorValue(container)).toContain("base")
     );
     server.opts.putStatus = 409;
-    const ta = container.querySelector("textarea.editor") as HTMLTextAreaElement;
     await act(async () => {
-      fireEvent.input(ta, { target: { value: "# Ow\n\nlocal" } });
+      setEditor(container, "# Ow\n\nlocal");
     });
     await waitFor(() => expect(container.querySelector(".conflict")).toBeTruthy());
     server.opts.putStatus = 0;
@@ -1361,9 +1341,8 @@ describe("conflict/deleted resolvers with a null current id", () => {
 
   async function raiseConflictThenDeleteOpen(container: HTMLElement, row: { id: number }) {
     server.opts.putStatus = 409;
-    const ta = container.querySelector("textarea.editor") as HTMLTextAreaElement;
     await act(async () => {
-      fireEvent.input(ta, { target: { value: "# X\n\nmine" } });
+      setEditor(container, "# X\n\nmine");
     });
     await waitFor(() => expect(container.querySelector(".conflict")).toBeTruthy());
     server.opts.putStatus = 0;
@@ -1389,7 +1368,7 @@ describe("conflict/deleted resolvers with a null current id", () => {
     location.hash = "#" + row.id;
     const { container } = render(<App />);
     await waitFor(() =>
-      expect((container.querySelector("textarea.editor") as HTMLTextAreaElement)?.value).toContain("v1")
+      expect(editorValue(container)).toContain("v1")
     );
     await raiseConflictThenDeleteOpen(container as unknown as HTMLElement, row);
 
@@ -1414,14 +1393,13 @@ describe("conflict/deleted resolvers with a null current id", () => {
     location.hash = "#" + row.id;
     const { container } = render(<App />);
     await waitFor(() =>
-      expect((container.querySelector("textarea.editor") as HTMLTextAreaElement)?.value).toContain("v1")
+      expect(editorValue(container)).toContain("v1")
     );
 
     // raise the DELETED banner (404 PUT), then delete the open memo from the sidebar
     server.opts.putStatus = 404;
-    const ta = container.querySelector("textarea.editor") as HTMLTextAreaElement;
     await act(async () => {
-      fireEvent.input(ta, { target: { value: "# Y\n\nbye" } });
+      setEditor(container, "# Y\n\nbye");
     });
     await waitFor(() => expect(container.querySelector(".conflict span")?.textContent).toContain("삭제"));
     server.opts.putStatus = 0;
@@ -1456,13 +1434,12 @@ describe("recoverAsNew success path", () => {
     location.hash = "#" + gone.id;
     const { container } = render(<App />);
     await waitFor(() =>
-      expect((container.querySelector("textarea.editor") as HTMLTextAreaElement)?.value).toContain("orig")
+      expect(editorValue(container)).toContain("orig")
     );
 
     server.opts.putStatus = 404; // deleted-elsewhere banner
-    const ta = container.querySelector("textarea.editor") as HTMLTextAreaElement;
     await act(async () => {
-      fireEvent.input(ta, { target: { value: "# RescueMe\n\nrescued for real" } });
+      setEditor(container, "# RescueMe\n\nrescued for real");
     });
     await waitFor(() => expect(container.querySelector(".conflict span")?.textContent).toContain("삭제"));
 
@@ -1475,7 +1452,7 @@ describe("recoverAsNew success path", () => {
     // a NEW server memo holds the rescued content; the old row was filtered out
     await waitFor(() => expect(server.memos.some((m) => m.content.includes("rescued for real"))).toBe(true));
     await waitFor(() =>
-      expect((container.querySelector("textarea.editor") as HTMLTextAreaElement)?.value).toContain("rescued for real")
+      expect(editorValue(container)).toContain("rescued for real")
     );
     expect(keep).toBeTruthy();
   });
@@ -1488,7 +1465,7 @@ describe("background sync edge branches", () => {
     location.hash = "#" + row.id;
     const { container } = render(<App />);
     await waitFor(() =>
-      expect((container.querySelector("textarea.editor") as HTMLTextAreaElement)?.value).toContain("v1")
+      expect(editorValue(container)).toContain("v1")
     );
 
     // change elsewhere, but hide the tab → sync() returns at document.hidden
@@ -1507,7 +1484,7 @@ describe("background sync edge branches", () => {
     ).length;
     expect(memosAfter).toBe(memosBefore); // no list fetch happened
     // editor still shows the old content (no reload)
-    expect((container.querySelector("textarea.editor") as HTMLTextAreaElement).value).toContain("v1");
+    expect(editorValue(container)).toContain("v1");
     hiddenSpy.mockRestore();
   });
 
@@ -1517,7 +1494,7 @@ describe("background sync edge branches", () => {
     location.hash = "#" + row.id;
     const { container } = render(<App />);
     await waitFor(() =>
-      expect((container.querySelector("textarea.editor") as HTMLTextAreaElement)?.value).toContain("v1")
+      expect(editorValue(container)).toContain("v1")
     );
 
     // make the next GET /memos return a non-ok status → sync's `!r.ok` early return
@@ -1536,7 +1513,7 @@ describe("background sync edge branches", () => {
     await new Promise((r) => setTimeout(r, 30));
     blocked = false;
     // still rendered, content unchanged (sync bailed at !r.ok)
-    expect((container.querySelector("textarea.editor") as HTMLTextAreaElement).value).toContain("v1");
+    expect(editorValue(container)).toContain("v1");
   });
 
   it("returns null and bails when the sync list fetch rejects", async () => {
@@ -1545,7 +1522,7 @@ describe("background sync edge branches", () => {
     location.hash = "#" + row.id;
     const { container } = render(<App />);
     await waitFor(() =>
-      expect((container.querySelector("textarea.editor") as HTMLTextAreaElement)?.value).toContain("v1")
+      expect(editorValue(container)).toContain("v1")
     );
     // make the sync list GET reject → the `.catch(() => null)` arm → `!r` early return.
     const orig = server.fetchImpl;
@@ -1571,15 +1548,14 @@ describe("background sync edge branches", () => {
     location.hash = "#" + row.id;
     const { container } = render(<App />);
     await waitFor(() =>
-      expect((container.querySelector("textarea.editor") as HTMLTextAreaElement)?.value).toContain("v1")
+      expect(editorValue(container)).toContain("v1")
     );
 
     // raise a conflict so conflictRef.current is true (a synchronous ref) — the sync
     // guard's `conflictRef.current` arm then makes the per-memo reload `return`.
     server.opts.putStatus = 409;
-    const ta = container.querySelector("textarea.editor") as HTMLTextAreaElement;
     await act(async () => {
-      fireEvent.input(ta, { target: { value: "# ConflictSync\n\nmine" } });
+      setEditor(container, "# ConflictSync\n\nmine");
     });
     await waitFor(() => expect(container.querySelector(".conflict")).toBeTruthy());
 
@@ -1593,7 +1569,7 @@ describe("background sync edge branches", () => {
     });
     await new Promise((r) => setTimeout(r, 40));
     // still showing the local edit, banner still up — no remote adoption happened
-    expect((container.querySelector("textarea.editor") as HTMLTextAreaElement).value).toContain("mine");
+    expect(editorValue(container)).toContain("mine");
     expect(container.querySelector(".conflict")).toBeTruthy();
   });
 
@@ -1603,7 +1579,7 @@ describe("background sync edge branches", () => {
     location.hash = "#" + row.id;
     const { container } = render(<App />);
     await waitFor(() =>
-      expect((container.querySelector("textarea.editor") as HTMLTextAreaElement)?.value).toContain("v1")
+      expect(editorValue(container)).toContain("v1")
     );
     await waitFor(() => expect(kv.get(DRAFT + row.id)).toBeNull());
 
@@ -1629,7 +1605,7 @@ describe("background sync edge branches", () => {
     });
     await new Promise((r) => setTimeout(r, 40));
     // sync hit `if (kv.get(DRAFT+id) != null) return` → no remote adoption
-    expect((container.querySelector("textarea.editor") as HTMLTextAreaElement).value).not.toContain("v2 remote");
+    expect(editorValue(container)).not.toContain("v2 remote");
     release();
     await new Promise((r) => setTimeout(r, 10));
   });
@@ -1641,7 +1617,7 @@ describe("background sync edge branches", () => {
     server.opts.postThrows = true; // boot newMemo → temp (id<0) open
     const { container } = render(<App />);
     await waitFor(() => expect(container.querySelector(".status.offline")).toBeTruthy());
-    await waitFor(() => expect(container.querySelector("textarea.editor")).toBeTruthy());
+    await waitFor(() => expect(editorEl(container)).toBeTruthy());
     // make the list GET succeed (already does) while keeping POST broken; the focus
     // sync runs the list, then the guard's `id < 0` arm returns before any reload.
     await act(async () => {
@@ -1649,7 +1625,7 @@ describe("background sync edge branches", () => {
     });
     await new Promise((r) => setTimeout(r, 30));
     // still the open temp, no per-memo reload happened
-    expect(container.querySelector("textarea.editor")).toBeTruthy();
+    expect(editorEl(container)).toBeTruthy();
     expect(container.querySelector(".app")).toBeTruthy();
   });
 
@@ -1661,7 +1637,7 @@ describe("beforeunload temp + in-flight branches", () => {
     server.opts.postThrows = true; // boot → temp memo open
     const { container } = render(<App />);
     await waitFor(() => expect(container.querySelector(".status.offline")).toBeTruthy());
-    await waitFor(() => expect(container.querySelector("textarea.editor")).toBeTruthy());
+    await waitFor(() => expect(editorEl(container)).toBeTruthy());
 
     const before = server.fetchImpl.mock.calls.length;
     await act(async () => {
@@ -1679,7 +1655,7 @@ describe("beforeunload temp + in-flight branches", () => {
     const row = server.seed({ title: "Inflight", content: "# Inflight\n\nv1" });
     location.hash = "#" + row.id;
     const { container } = render(<App />);
-    await waitFor(() => expect(container.querySelector("textarea.editor")).toBeTruthy());
+    await waitFor(() => expect(editorEl(container)).toBeTruthy());
 
     // gate the PUT so a save stays in flight while we fire beforeunload
     let release: () => void = () => {};
@@ -1692,9 +1668,8 @@ describe("beforeunload temp + in-flight branches", () => {
       return orig(input, init);
     }) as unknown as typeof fetch;
 
-    const ta = container.querySelector("textarea.editor") as HTMLTextAreaElement;
     await act(async () => {
-      fireEvent.input(ta, { target: { value: "# Inflight\n\nnow editing" } });
+      setEditor(container, "# Inflight\n\nnow editing");
       fireEvent.keyDown(window, { key: "s", metaKey: true }); // force save → inFlight true
     });
     // memo has content → not fresh-blank, so the in-flight warn branch is reached;
@@ -1829,18 +1804,17 @@ describe("onDrop no-files branch", () => {
     location.hash = "#" + row.id;
     const { container } = render(<App />);
     await waitFor(() =>
-      expect((container.querySelector("textarea.editor") as HTMLTextAreaElement)?.value).toContain("body")
+      expect(editorValue(container)).toContain("body")
     );
-    const ta = container.querySelector("textarea.editor") as HTMLTextAreaElement;
-    const before = ta.value;
+    const before = editorValue(container);
     const memosBefore = server.memos.length;
     // a drop event with an empty files list → `if (files && files.length)` false arm
     const dt = { files: [], types: [] } as unknown as DataTransfer;
     await act(async () => {
-      fireEvent.drop(ta, { dataTransfer: dt });
+      fireEvent.drop(editorContent(container), { dataTransfer: dt });
     });
     await new Promise((r) => setTimeout(r, 10));
-    expect((container.querySelector("textarea.editor") as HTMLTextAreaElement).value).toBe(before);
+    expect(editorValue(container)).toBe(before);
     expect(server.memos.length).toBe(memosBefore);
   });
 });
@@ -1867,7 +1841,7 @@ describe("openMemo temp with no draft (id<0 empty arm)", () => {
     });
     // opened the temp with no local content → editor renders empty (id<0 "" arm)
     await waitFor(() => expect(container.querySelector(".memo-list li.active")).toBeTruthy());
-    expect((container.querySelector("textarea.editor") as HTMLTextAreaElement).value).toBe("");
+    expect(editorValue(container)).toBe("");
   });
 });
 
@@ -1879,14 +1853,13 @@ describe("discardDeleted removes the open real memo from the list", () => {
     location.hash = "#" + row.id;
     const { container } = render(<App />);
     await waitFor(() =>
-      expect((container.querySelector("textarea.editor") as HTMLTextAreaElement)?.value).toContain("body")
+      expect(editorValue(container)).toContain("body")
     );
 
     // raise the deleted-elsewhere banner via a 404 PUT, then discard
     server.opts.putStatus = 404;
-    const ta = container.querySelector("textarea.editor") as HTMLTextAreaElement;
     await act(async () => {
-      fireEvent.input(ta, { target: { value: "# Discardable\n\nbye now" } });
+      setEditor(container, "# Discardable\n\nbye now");
     });
     await waitFor(() => expect(container.querySelector(".conflict span")?.textContent).toContain("삭제"));
 
@@ -1912,7 +1885,7 @@ describe("background sync probe rejection", () => {
     location.hash = "#" + row.id;
     const { container } = render(<App />);
     await waitFor(() =>
-      expect((container.querySelector("textarea.editor") as HTMLTextAreaElement)?.value).toContain("v1")
+      expect(editorValue(container)).toContain("v1")
     );
 
     // remove the memo from the list (so `!cur`), but make the per-memo probe GET
@@ -1977,7 +1950,7 @@ describe("deleteMemo a non-current temp (currentId !== id)", () => {
       fireEvent.click(openLi);
     });
     await waitFor(() =>
-      expect((container.querySelector("textarea.editor") as HTMLTextAreaElement)?.value).toContain("open body")
+      expect(editorValue(container)).toContain("open body")
     );
     // delete the OTHER temp (-72) → deleteMemo's `currentId === id` is FALSE (else arm),
     // so the editor stays on -71
@@ -1992,7 +1965,7 @@ describe("deleteMemo a non-current temp (currentId !== id)", () => {
       expect(titles).not.toContain("OtherTemp");
     });
     // editor still shows the open temp (currentId untouched)
-    expect((container.querySelector("textarea.editor") as HTMLTextAreaElement).value).toContain("open body");
+    expect(editorValue(container)).toContain("open body");
   });
 });
 
@@ -2003,13 +1976,12 @@ describe("save with a blank value (false arm of !isBlank)", () => {
     location.hash = "#" + row.id;
     const { container } = render(<App />);
     await waitFor(() =>
-      expect((container.querySelector("textarea.editor") as HTMLTextAreaElement)?.value).toContain("start")
+      expect(editorValue(container)).toContain("start")
     );
     // type a BLANK value ("# " only) then Cmd+S → save() with isBlank(value) true →
     // the `if (!isBlank(value))` guard takes its else arm (no freshIds.delete)
-    const ta = container.querySelector("textarea.editor") as HTMLTextAreaElement;
     await act(async () => {
-      fireEvent.input(ta, { target: { value: "#   " } });
+      setEditor(container, "#   ");
     });
     // separate act so the content state propagates before Cmd+S reads it
     await act(async () => {
@@ -2026,14 +1998,13 @@ describe("discardDeleted with a null current id (id == null else)", () => {
     location.hash = "#" + row.id;
     const { container } = render(<App />);
     await waitFor(() =>
-      expect((container.querySelector("textarea.editor") as HTMLTextAreaElement)?.value).toContain("v1")
+      expect(editorValue(container)).toContain("v1")
     );
     // raise the deleted banner, then delete the open memo from the sidebar → currentId
     // becomes null while the banner stays up
     server.opts.putStatus = 404;
-    const ta = container.querySelector("textarea.editor") as HTMLTextAreaElement;
     await act(async () => {
-      fireEvent.input(ta, { target: { value: "# Zd\n\nbye" } });
+      setEditor(container, "# Zd\n\nbye");
     });
     await waitFor(() => expect(container.querySelector(".conflict span")?.textContent).toContain("삭제"));
     server.opts.putStatus = 0;
@@ -2058,7 +2029,7 @@ describe("Cmd/Ctrl key handler false arms", () => {
     location.hash = "#" + row.id;
     const { container } = render(<App />);
     await waitFor(() =>
-      expect((container.querySelector("textarea.editor") as HTMLTextAreaElement)?.value).toContain("v1")
+      expect(editorValue(container)).toContain("v1")
     );
     await waitFor(() => expect(kv.get(DRAFT + row.id)).toBeNull()); // settled, no timer
     // Cmd+S with no debounce pending → `if (timer.current)` else arm, save still runs
@@ -2074,7 +2045,7 @@ describe("Cmd/Ctrl key handler false arms", () => {
     const row = server.seed({ title: "OtherKey", content: "# OtherKey\n\nv1" });
     location.hash = "#" + row.id;
     const { container } = render(<App />);
-    await waitFor(() => expect(container.querySelector("textarea.editor")).toBeTruthy());
+    await waitFor(() => expect(editorEl(container)).toBeTruthy());
     const before = server.memos.length;
     // Cmd+P (not s, not k) → k === "s" false, k === "k" false (else of the else-if)
     await act(async () => {
@@ -2092,7 +2063,7 @@ describe("beforeunload nothing-pending else arm", () => {
     location.hash = "#" + row.id;
     const { container } = render(<App />);
     await waitFor(() =>
-      expect((container.querySelector("textarea.editor") as HTMLTextAreaElement)?.value).toContain("v1")
+      expect(editorValue(container)).toContain("v1")
     );
     // make sure the memo is non-fresh + has no pending save (open + settled, never edited)
     await waitFor(() => expect(kv.get(DRAFT + row.id)).toBeNull());
@@ -2112,16 +2083,15 @@ describe("onDragOver without a Files payload (else arm)", () => {
     location.hash = "#" + row.id;
     const { container } = render(<App />);
     await waitFor(() =>
-      expect((container.querySelector("textarea.editor") as HTMLTextAreaElement)?.value).toContain("body")
+      expect(editorValue(container)).toContain("body")
     );
-    const ta = container.querySelector("textarea.editor") as HTMLTextAreaElement;
     // dragOver with types lacking "Files" → `types?.includes("Files")` false → no preventDefault.
     // Use the testing-library helper so preact's synthetic onDragOver handler runs, and
     // assert via a spy on preventDefault (defaultPrevented isn't reliably mirrored).
     const dt = { types: ["text/plain"] } as unknown as DataTransfer;
     let prevented = false;
     await act(async () => {
-      fireEvent.dragOver(ta, {
+      fireEvent.dragOver(editorContent(container), {
         dataTransfer: dt,
         preventDefault: () => {
           prevented = true;
@@ -2357,11 +2327,10 @@ describe("deleteMemo a fresh real memo", () => {
     authedBoot();
     const { container } = render(<App />);
     // boot creates a fresh blank real memo (positive id, in freshIds) and opens it
-    await waitFor(() => expect(container.querySelector("textarea.editor")).toBeTruthy());
-    const ta = container.querySelector("textarea.editor") as HTMLTextAreaElement;
+    await waitFor(() => expect(editorEl(container)).toBeTruthy());
     // arm a debounced save (timer.current set) while the memo stays blank+fresh
     await act(async () => {
-      fireEvent.input(ta, { target: { value: "#  " } });
+      setEditor(container, "#  ");
     });
     // make the purge DELETE reject so deleteMemo's `catch { setOffline(true) }` runs (line 400)
     const orig = server.fetchImpl;
@@ -2399,12 +2368,11 @@ describe("deleteMemo a fresh real memo", () => {
   it("purges a fresh real memo that is NOT the open one (currentId !== id false arms)", async () => {
     authedBoot();
     const { container } = render(<App />);
-    await waitFor(() => expect(container.querySelector("textarea.editor")).toBeTruthy());
+    await waitFor(() => expect(editorEl(container)).toBeTruthy());
     // create a SECOND fresh memo via + New; the previous fresh-blank one is purged on
     // leave, so make the first non-blank first by typing, then create another.
-    const ta = container.querySelector("textarea.editor") as HTMLTextAreaElement;
     await act(async () => {
-      fireEvent.input(ta, { target: { value: "# Kept\n\nreal" } });
+      setEditor(container, "# Kept\n\nreal");
     });
     await waitFor(() => expect(kv.get(DRAFT) ?? true).toBeTruthy());
     // + New → a fresh blank memo becomes current; the "Kept" memo stays in the list
@@ -2420,7 +2388,7 @@ describe("deleteMemo a fresh real memo", () => {
       fireEvent.click(keptLi); // leaveCurrent purges the blank fresh memo on leave
     });
     await waitFor(() =>
-      expect((container.querySelector("textarea.editor") as HTMLTextAreaElement)?.value).toContain("real")
+      expect(editorValue(container)).toContain("real")
     );
     expect(container.querySelector(".app")).toBeTruthy();
   });
@@ -2436,7 +2404,7 @@ describe("save un-acked 409 retry", () => {
     location.hash = "#" + row.id;
     const { container } = render(<App />);
     await waitFor(() =>
-      expect((container.querySelector("textarea.editor") as HTMLTextAreaElement)?.value).toContain("v1")
+      expect(editorValue(container)).toContain("v1")
     );
     await waitFor(() => expect(kv.get(DRAFT + row.id)).toBeNull());
 
@@ -2475,9 +2443,8 @@ describe("save un-acked 409 retry", () => {
 
     // Phase 1 edit → the debounced save's PUT rejects → unacked.current = { id, value }
     // (input then a separate Cmd+S act so the content state propagates before save reads it)
-    const ta = container.querySelector("textarea.editor") as HTMLTextAreaElement;
     await act(async () => {
-      fireEvent.input(ta, { target: { value: unackedValue } });
+      setEditor(container, unackedValue);
     });
     await act(async () => {
       fireEvent.keyDown(window, { key: "s", metaKey: true });
@@ -2490,7 +2457,7 @@ describe("save un-acked 409 retry", () => {
     phase = "conflict";
     const finalValue = "# Unacked\n\nresumed editing";
     await act(async () => {
-      fireEvent.input(ta, { target: { value: finalValue } });
+      setEditor(container, finalValue);
     });
     await act(async () => {
       fireEvent.keyDown(window, { key: "s", metaKey: true });
@@ -2506,7 +2473,7 @@ describe("save un-acked 409 retry", () => {
     location.hash = "#" + row.id;
     const { container } = render(<App />);
     await waitFor(() =>
-      expect((container.querySelector("textarea.editor") as HTMLTextAreaElement)?.value).toContain("v1")
+      expect(editorValue(container)).toContain("v1")
     );
     await waitFor(() => expect(kv.get(DRAFT + row.id)).toBeNull());
 
@@ -2533,9 +2500,8 @@ describe("save un-acked 409 retry", () => {
       return orig(input, init);
     }) as unknown as typeof fetch;
 
-    const ta = container.querySelector("textarea.editor") as HTMLTextAreaElement;
     await act(async () => {
-      fireEvent.input(ta, { target: { value: unackedValue } });
+      setEditor(container, unackedValue);
     });
     await act(async () => {
       fireEvent.keyDown(window, { key: "s", metaKey: true });
@@ -2544,7 +2510,7 @@ describe("save un-acked 409 retry", () => {
 
     phase = "conflict";
     await act(async () => {
-      fireEvent.input(ta, { target: { value: "# Unacked2\n\nmore edits" } });
+      setEditor(container, "# Unacked2\n\nmore edits");
     });
     await act(async () => {
       fireEvent.keyDown(window, { key: "s", metaKey: true });
@@ -2559,7 +2525,7 @@ describe("save un-acked 409 retry", () => {
     location.hash = "#" + row.id;
     const { container } = render(<App />);
     await waitFor(() =>
-      expect((container.querySelector("textarea.editor") as HTMLTextAreaElement)?.value).toContain("v1")
+      expect(editorValue(container)).toContain("v1")
     );
     await waitFor(() => expect(kv.get(DRAFT + row.id)).toBeNull());
 
@@ -2584,9 +2550,8 @@ describe("save un-acked 409 retry", () => {
       return orig(input, init);
     }) as unknown as typeof fetch;
 
-    const ta = container.querySelector("textarea.editor") as HTMLTextAreaElement;
     await act(async () => {
-      fireEvent.input(ta, { target: { value: unackedValue } });
+      setEditor(container, unackedValue);
     });
     await act(async () => {
       fireEvent.keyDown(window, { key: "s", metaKey: true });
@@ -2595,7 +2560,7 @@ describe("save un-acked 409 retry", () => {
 
     phase = "conflict";
     await act(async () => {
-      fireEvent.input(ta, { target: { value: "# Unacked3\n\nmore edits" } });
+      setEditor(container, "# Unacked3\n\nmore edits");
     });
     await act(async () => {
       fireEvent.keyDown(window, { key: "s", metaKey: true });
@@ -2618,16 +2583,15 @@ describe("nav effect clears currentId with an already-empty hash (176 false arm)
     location.hash = "#" + row.id;
     const { container } = render(<App />);
     await waitFor(() =>
-      expect((container.querySelector("textarea.editor") as HTMLTextAreaElement)?.value).toContain("body")
+      expect(editorValue(container)).toContain("body")
     );
     // the open memo set the hash to its id (nav effect already ran once)
     await waitFor(() => expect(location.hash).toBe("#" + row.id));
 
     // raise the deleted-elsewhere banner via a 404 PUT
     server.opts.putStatus = 404;
-    const ta = container.querySelector("textarea.editor") as HTMLTextAreaElement;
     await act(async () => {
-      fireEvent.input(ta, { target: { value: "# NavNull\n\nbye now" } });
+      setEditor(container, "# NavNull\n\nbye now");
     });
     await waitFor(() => expect(container.querySelector(".conflict span")?.textContent).toContain("삭제"));
 
@@ -2653,7 +2617,7 @@ describe("deleteMemo a fresh real memo with no pending timer (395 false arm)", (
     const { container } = render(<App />);
     // boot POSTs a fresh blank real memo (positive id, in freshIds) and opens it,
     // but NOTHING has been typed → timer.current is null (no debounced save armed).
-    await waitFor(() => expect(container.querySelector("textarea.editor")).toBeTruthy());
+    await waitFor(() => expect(editorEl(container)).toBeTruthy());
     await waitFor(() => expect(container.querySelector(".memo-list li")).toBeTruthy());
 
     // delete the open fresh memo via its × → freshIds.has(id) true, but
@@ -2687,7 +2651,7 @@ describe("save resolves for a no-longer-current memo (567 false arm)", () => {
     location.hash = "#" + a.id;
     const { container } = render(<App />);
     await waitFor(() =>
-      expect((container.querySelector("textarea.editor") as HTMLTextAreaElement)?.value).toContain("alpha")
+      expect(editorValue(container)).toContain("alpha")
     );
     await waitFor(() => expect(kv.get(DRAFT + a.id)).toBeNull());
 
@@ -2704,9 +2668,8 @@ describe("save resolves for a no-longer-current memo (567 false arm)", () => {
     }) as unknown as typeof fetch;
 
     // edit A and force the save (Cmd+S) → A's PUT is now gated/in flight
-    const ta = container.querySelector("textarea.editor") as HTMLTextAreaElement;
     await act(async () => {
-      fireEvent.input(ta, { target: { value: "# Aaa567\n\nalpha edited" } });
+      setEditor(container, "# Aaa567\n\nalpha edited");
     });
     await act(async () => {
       fireEvent.keyDown(window, { key: "s", metaKey: true });
@@ -2720,7 +2683,7 @@ describe("save resolves for a no-longer-current memo (567 false arm)", () => {
       fireEvent.click(bLi);
     });
     await waitFor(() =>
-      expect((container.querySelector("textarea.editor") as HTMLTextAreaElement)?.value).toContain("beta")
+      expect(editorValue(container)).toContain("beta")
     );
 
     // release A's PUT → save() success runs with id === a.id but currentIdRef === b.id
@@ -2731,7 +2694,7 @@ describe("save resolves for a no-longer-current memo (567 false arm)", () => {
     });
     // A's edit still landed on the server; the editor stayed on B
     await waitFor(() => expect(server.memos.find((m) => m.id === a.id)?.content).toContain("alpha edited"));
-    expect((container.querySelector("textarea.editor") as HTMLTextAreaElement).value).toContain("beta");
+    expect(editorValue(container)).toContain("beta");
   });
 });
 
@@ -2745,12 +2708,11 @@ describe("background sync reload aborts when the user types mid-fetch (711 false
     location.hash = "#" + row.id;
     const { container } = render(<App />);
     await waitFor(() =>
-      expect((container.querySelector("textarea.editor") as HTMLTextAreaElement)?.value).toContain("v1")
+      expect(editorValue(container)).toContain("v1")
     );
     // settle: no pending draft, so the sync guard reaches the reload block
     await waitFor(() => expect(kv.get(DRAFT + row.id)).toBeNull());
 
-    const ta = container.querySelector("textarea.editor") as HTMLTextAreaElement;
 
     // gate the per-memo reload GET (/api/memos/:id). While it's gated, we type into
     // the editor so onEdit arms timer.current; then release the GET so the
@@ -2782,7 +2744,7 @@ describe("background sync reload aborts when the user types mid-fetch (711 false
     // type while the reload GET is gated → onEdit arms timer.current (no debounce
     // fires within this window: SAVE_DEBOUNCE is 300ms, we release immediately)
     await act(async () => {
-      fireEvent.input(ta, { target: { value: "# Sync711\n\nmy local edit" } });
+      setEditor(container, "# Sync711\n\nmy local edit");
     });
 
     // release the reload GET → it resolves with timer.current != null → 711 FALSE arm
@@ -2792,8 +2754,8 @@ describe("background sync reload aborts when the user types mid-fetch (711 false
     });
 
     // the remote "v2 remote" was NOT adopted — the user's in-progress edit stands
-    expect((container.querySelector("textarea.editor") as HTMLTextAreaElement).value).toContain("my local edit");
-    expect((container.querySelector("textarea.editor") as HTMLTextAreaElement).value).not.toContain("v2 remote");
+    expect(editorValue(container)).toContain("my local edit");
+    expect(editorValue(container)).not.toContain("v2 remote");
     // clean up the armed save timer so it doesn't bleed into the next test
     await waitFor(() => expect(kv.get(DRAFT + row.id)).toBeNull(), { timeout: 3000 });
   });
@@ -2829,18 +2791,13 @@ describe("preview caret centering", () => {
     location.hash = "#" + row.id;
     const { container } = render(<App />);
     await waitFor(() =>
-      expect((container.querySelector("textarea.editor") as HTMLTextAreaElement)?.value).toBe(content)
+      expect(editorValue(container)).toBe(content)
     );
-    const ta = container.querySelector("textarea.editor") as HTMLTextAreaElement;
     const pv = container.querySelector(".preview") as HTMLDivElement;
     // the preview is debounced — wait until it has rendered the content (all the
     // sample docs end in "body") before tests read its data-source-line blocks.
     await waitFor(() => expect(pv.textContent).toContain("body"));
-    return { ta, pv };
-  }
-
-  function caret(ta: HTMLTextAreaElement, pos: number) {
-    ta.selectionStart = ta.selectionEnd = pos;
+    return { container, pv };
   }
 
   // NB: happy-dom's DOMPurify drops the *first* block's tag (a test-env quirk —
@@ -2849,37 +2806,34 @@ describe("preview caret centering", () => {
   const DOC = "intro\n\n# Scroll\n\nbody";
 
   it("centers the block at the caret line in the preview", async () => {
-    const { ta, pv } = await openEditor(DOC);
+    const { container, pv } = await openEditor(DOC);
     const block = pv.querySelector('[data-source-line="4"]') as HTMLElement; // the <p>body
     expect(block).toBeTruthy();
     viewport(pv, 200);
     place(block, pv, 300, 40); // block sits 300px down, 40px tall
-    caret(ta, DOC.length); // caret on "body" (line 4)
     await act(async () => {
-      fireEvent.select(ta);
+      caretAt(container, DOC.length); // caret on "body" (line 4)
     });
     expect(pv.scrollTop).toBe(300 - (200 - 40) / 2); // centered: 220
   });
 
   it("uses the last block at or before the caret line (stops past it)", async () => {
-    const { ta, pv } = await openEditor(DOC);
+    const { container, pv } = await openEditor(DOC);
     const h1 = pv.querySelector('[data-source-line="2"]') as HTMLElement; // # Scroll
     viewport(pv, 200);
     place(h1, pv, 400, 30);
-    caret(ta, 16); // on the blank line 3 → newest block at/<= line3 is the h1@2
     await act(async () => {
-      fireEvent.select(ta);
+      caretAt(container, 16); // on the blank line 3 → newest block at/<= line3 is the h1@2
     });
     expect(pv.scrollTop).toBe(400 - (200 - 30) / 2); // centered on the h1 (315), p@4 skipped
   });
 
   it("does nothing when no block precedes the caret line", async () => {
-    const { ta, pv } = await openEditor("intro\n\nbody"); // p@0 (dropped), p@2
+    const { container, pv } = await openEditor("intro\n\nbody"); // p@0 (dropped), p@2
     viewport(pv, 200);
     pv.scrollTop = 5;
-    caret(ta, 0); // line 0, before the only surviving block (p@2)
     await act(async () => {
-      fireEvent.select(ta);
+      caretAt(container, 0); // line 0, before the only surviving block (p@2)
     });
     expect(pv.scrollTop).toBe(5); // untouched
   });

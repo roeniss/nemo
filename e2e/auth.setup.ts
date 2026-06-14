@@ -12,5 +12,5 @@ setup("authenticate", async ({ request }) => {
 // first page load) so the first real test isn't slow enough to flake on cold start
 setup("warm up", async ({ page }) => {
   await page.goto("/");
-  await page.locator("form.login, textarea.editor").first().waitFor({ timeout: 60_000 });
+  await page.locator("form.login, .cm-editor .cm-content").first().waitFor({ timeout: 60_000 });
 });

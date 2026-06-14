@@ -1,5 +1,5 @@
 import { test, expect } from "./fixtures";
-import { sel, blankMemo } from "./helpers";
+import { blankMemo, fillEditor } from "./helpers";
 
 // Desktop-only feature. Unit tests fake getBoundingClientRect (happy-dom doesn't
 // lay out), so this real-layout check is what actually proves (a) the rendered
@@ -13,16 +13,17 @@ test.describe("desktop preview caret centering", () => {
 
   test("centers the rendered block under the editor caret", async ({ page }) => {
     await blankMemo(page);
-    await page.fill(sel.editor, doc);
+    await fillEditor(page, doc);
     await expect(page.locator(".preview", { hasText: "MIDMARK" })).toBeVisible();
 
-    // put the caret on the MIDMARK line and notify the editor (onSelect)
+    // put the caret on the MIDMARK line. The doc is long and CodeMirror only
+    // renders the lines near the viewport, so MIDMARK isn't in the DOM to click —
+    // drive the caret through the editor view exposed on its root element.
     await page.evaluate(() => {
-      const ed = document.querySelector("textarea.editor") as HTMLTextAreaElement;
-      const idx = ed.value.indexOf("MIDMARK");
-      ed.focus();
-      ed.setSelectionRange(idx, idx);
-      ed.dispatchEvent(new Event("select", { bubbles: true }));
+      const view = (document.querySelector(".cm-editor") as unknown as { cmView: any }).cmView;
+      const idx = view.state.doc.toString().indexOf("## MIDMARK");
+      view.focus();
+      view.dispatch({ selection: { anchor: idx } });
     });
 
     // the MIDMARK block's vertical center should land near the preview's center
@@ -43,14 +44,15 @@ test.describe("desktop preview caret centering", () => {
 
   test("editor can scroll past the last line (tall bottom padding)", async ({ page }) => {
     await blankMemo(page);
-    await page.fill(sel.editor, doc);
+    await fillEditor(page, doc);
 
     const { padBottom, viewportH, edMax } = await page.evaluate(() => {
-      const ed = document.querySelector("textarea.editor") as HTMLTextAreaElement;
+      const content = document.querySelector(".cm-content") as HTMLElement;
+      const scroller = document.querySelector(".cm-scroller") as HTMLElement;
       return {
-        padBottom: parseFloat(getComputedStyle(ed).paddingBottom),
+        padBottom: parseFloat(getComputedStyle(content).paddingBottom),
         viewportH: window.innerHeight,
-        edMax: ed.scrollHeight - ed.clientHeight,
+        edMax: scroller.scrollHeight - scroller.clientHeight,
       };
     });
     // ~50vh of scroll-past-end space below the content

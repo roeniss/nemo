@@ -173,7 +173,9 @@ export default function App() {
         // surface whether this session is an admin so Settings can show the
         // user-management panel; failures just leave it off.
         api("/me")
-          .then((me) => (me.ok ? me.json() : null))
+          .then((me) =>
+            me.ok ? (me.json() as Promise<{ uid?: number; username?: string; admin?: boolean }>) : null,
+          )
           .then((d) => setAdmin(!!d?.admin))
           .catch(() => {});
         const list = (await r.json()) as MemoMeta[];

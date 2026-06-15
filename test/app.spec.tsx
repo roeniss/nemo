@@ -3108,6 +3108,19 @@ describe("settings view", () => {
 });
 
 describe("plain list auto-continue on Enter", () => {
+  let rafSpy: ReturnType<typeof vi.spyOn>;
+  beforeEach(() => {
+    // Make requestAnimationFrame execute its callback synchronously so the
+    // cursor-repositioning code inside the RAF callbacks is covered.
+    rafSpy = vi.spyOn(window, "requestAnimationFrame").mockImplementation((cb) => {
+      cb(0);
+      return 0;
+    });
+  });
+  afterEach(() => {
+    rafSpy.mockRestore();
+  });
+
   async function openEditorWithContent(content: string) {
     authedBoot();
     const row = server.seed({ content, title: "test" });
@@ -3164,5 +3177,34 @@ describe("plain list auto-continue on Enter", () => {
       fireEvent.keyDown(ta, { key: "Enter" });
     });
     await waitFor(() => expect(ta.value).toBe("- [ ] checkbox item\n- [ ] "));
+  });
+});
+
+describe("badge keyword filter", () => {
+  it("clicking an active badge deselects it (toggles keyword back to null)", async () => {
+    authedBoot();
+    // Seed two memos with the same keyword prefix so badges appear
+    server.seed({ title: "work todo", content: "" });
+    server.seed({ title: "work notes", content: "" });
+    const { container } = render(<App />);
+    // Wait for memo list and badges to render
+    await waitFor(() => expect(container.querySelector(".badges")).toBeTruthy());
+
+    const workBadge = Array.from(container.querySelectorAll(".badge")).find(
+      (b) => b.textContent === "work"
+    ) as HTMLButtonElement;
+    expect(workBadge).toBeTruthy();
+
+    // First click — select the badge (becomes active)
+    await act(async () => {
+      fireEvent.click(workBadge);
+    });
+    await waitFor(() => expect(workBadge.className).toContain("active"));
+
+    // Second click — deselect (cur === k → returns null, badge loses active class)
+    await act(async () => {
+      fireEvent.click(workBadge);
+    });
+    await waitFor(() => expect(workBadge.className).not.toContain("active"));
   });
 });

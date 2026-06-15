@@ -76,7 +76,7 @@ afterEach(() => {
 });
 
 describe("passkey conditional UI", () => {
-  it("calls startAuthentication with useBrowserAutofill:true on login mount", async () => {
+  it("calls startAuthentication without useBrowserAutofill on login mount (immediate popup)", async () => {
     vi.mocked(startAuthentication).mockRejectedValue(
       Object.assign(new Error("NotAllowedError"), { name: "NotAllowedError" })
     );
@@ -87,7 +87,7 @@ describe("passkey conditional UI", () => {
     const { container } = render(<App />);
     await waitFor(() => expect(container.querySelector(".login")).toBeTruthy());
 
-    // Wait for the conditional UI call to fire
+    // Wait for the immediate passkey call to fire
     await waitFor(() => {
       const calls = fetchImpl.mock.calls.filter(
         (c) => String(c[0]).includes("/passkey/auth/options")
@@ -97,7 +97,7 @@ describe("passkey conditional UI", () => {
 
     await waitFor(() => {
       expect(vi.mocked(startAuthentication)).toHaveBeenCalledWith(
-        expect.objectContaining({ useBrowserAutofill: true })
+        expect.not.objectContaining({ useBrowserAutofill: true })
       );
     });
   });

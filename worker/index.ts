@@ -122,7 +122,7 @@ const app = new Hono<{ Bindings: Bindings }>();
 // Reads the authenticated user off the JWT payload the jwt() middleware sets.
 // uid/admin are populated by the multi-tenant login (issue #66); this reads
 // them defensively (defaulting to a non-admin uid 0) so it works regardless.
-function getUser(c: any): { uid: number; admin: boolean } {
+export function getUser(c: any): { uid: number; admin: boolean } {
   const payload: Record<string, unknown> = c.get("jwtPayload") ?? {};
   return {
     uid: Number(payload.uid ?? 0),

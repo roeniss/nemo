@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import app, { hashPassword } from "../worker/index";
+import app, { hashPassword, getUser } from "../worker/index";
 import { D1 } from "./d1";
 
 // AUTH_PASS is stored as a PBKDF2 hash; mint one once for the test password.
@@ -150,5 +150,26 @@ describe("turnstile client ip", () => {
     } finally {
       globalThis.fetch = orig;
     }
+  });
+});
+
+// getUser reads uid/admin off the jwt payload with defensive fallbacks: a
+// missing payload defaults to {} and a missing uid defaults to 0. Both arms are
+// unreachable through the routed app (the jwt middleware always sets a payload
+// carrying these claims), so unit-test the helper directly.
+describe("getUser fallbacks", () => {
+  it("defaults uid to 0 and admin to false when the payload omits them", () => {
+    const c = { get: () => ({ sub: "tester" }) };
+    expect(getUser(c)).toEqual({ uid: 0, admin: false });
+  });
+
+  it("defaults to an empty payload when jwtPayload is absent", () => {
+    const c = { get: () => undefined };
+    expect(getUser(c)).toEqual({ uid: 0, admin: false });
+  });
+
+  it("reads uid and admin when present", () => {
+    const c = { get: () => ({ uid: 7, admin: true }) };
+    expect(getUser(c)).toEqual({ uid: 7, admin: true });
   });
 });

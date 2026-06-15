@@ -97,6 +97,7 @@ export default function App() {
     themePref === "system" ? (systemDark ? "dark" : "light") : themePref;
   const [saving, setSaving] = useState(false);
   const [offline, setOffline] = useState(false);
+  const [admin, setAdmin] = useState(false); // surfaces the Settings admin panel (issue #66)
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastSaveAt = useRef(0); // for the max-wait save guarantee
   const inFlight = useRef(false); // one server save at a time (avoids self-conflict)
@@ -169,6 +170,14 @@ export default function App() {
         }
         localStorage.setItem("qm-authed", "1");
         setAuthed(true);
+        // surface whether this session is an admin so Settings can show the
+        // user-management panel; failures just leave it off.
+        api("/me")
+          .then((me) =>
+            me.ok ? (me.json() as Promise<{ uid?: number; username?: string; admin?: boolean }>) : null,
+          )
+          .then((d) => setAdmin(!!d?.admin))
+          .catch(() => {});
         const list = (await r.json()) as MemoMeta[];
         writeList(LIST_CACHE, list);
         const merged = [...temps, ...list].sort(byRecent);
@@ -1382,7 +1391,7 @@ export default function App() {
         )}
 
         {view === "settings" ? (
-          <Settings flash={flash} onLogout={logout} />
+          <Settings flash={flash} onLogout={logout} admin={admin} />
         ) : viewing ? (
           <div className="pane">
             <textarea

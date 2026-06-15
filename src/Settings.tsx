@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { startRegistration } from "@simplewebauthn/browser";
 import type { PublicKeyCredentialCreationOptionsJSON } from "@simplewebauthn/browser";
 import { api } from "./lib";
+import { AdminPanel } from "./AdminPanel";
 
 type TokenMeta = {
   id: number;
@@ -12,7 +13,7 @@ type TokenMeta = {
   last_used_at: number | null;
 };
 
-export function Settings({ flash, onLogout }: { flash: (msg: string) => void; onLogout?: () => void }) {
+export function Settings({ flash, onLogout, admin }: { flash: (msg: string) => void; onLogout?: () => void; admin?: boolean }) {
   const [tokens, setTokens] = useState<TokenMeta[]>([]);
   const [label, setLabel] = useState("");
   const [created, setCreated] = useState<string | null>(null); // plaintext, shown once
@@ -131,6 +132,8 @@ export function Settings({ flash, onLogout }: { flash: (msg: string) => void; on
       <p className="muted">Register a passkey (fingerprint, Face ID, or hardware key) as an additional login option.</p>
       <button onClick={registerPasskey}>Passkey 등록</button>
       {passkeyMsg && <p className="muted">{passkeyMsg}</p>}
+
+      {admin && <AdminPanel />}
 
       {onLogout && (
         <div className="settings-logout">

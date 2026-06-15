@@ -3170,6 +3170,68 @@ describe("checkbox rAF cursor positioning", () => {
   });
 });
 
+describe("checkbox toggle via preview click (real handler)", () => {
+  async function openEditorWithContent(content: string) {
+    authedBoot();
+    const row = server.seed({ content, title: "test" });
+    location.hash = "#" + row.id;
+    const { container } = render(<App />);
+    await waitFor(() =>
+      expect((container.querySelector("textarea.editor") as HTMLTextAreaElement)?.value).toBe(content)
+    );
+    const ta = container.querySelector("textarea.editor") as HTMLTextAreaElement;
+    return { container, ta, row };
+  }
+
+  async function findCheckboxes(container: HTMLElement) {
+    let boxes: HTMLInputElement[] = [];
+    await waitFor(() => {
+      boxes = Array.from(
+        container.querySelectorAll('.preview input[type="checkbox"]')
+      ) as HTMLInputElement[];
+      expect(boxes.length).toBeGreaterThan(0);
+    });
+    return boxes;
+  }
+
+  // The app handles preview checkboxes via a delegated native listener on the
+  // preview container. marked renders task-list checkboxes as `disabled`, and a
+  // disabled control won't dispatch a click — so clear it first, then dispatch a
+  // bubbling click to drive the real handler.
+  function bubblingClick(el: Element) {
+    (el as HTMLInputElement).disabled = false;
+    el.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+  }
+
+  it("clicking the first preview checkbox checks it in the editor source", async () => {
+    const { container, ta } = await openEditorWithContent("- [ ] one\n- [ ] two");
+    const boxes = await findCheckboxes(container);
+    await act(async () => {
+      bubblingClick(boxes[0]);
+    });
+    await waitFor(() => expect(ta.value).toBe("- [x] one\n- [ ] two"));
+  });
+
+  it("clicking the second preview checkbox toggles only that line", async () => {
+    const { container, ta } = await openEditorWithContent("- [ ] one\n- [x] two");
+    const boxes = await findCheckboxes(container);
+    await act(async () => {
+      bubblingClick(boxes[1]);
+    });
+    await waitFor(() => expect(ta.value).toBe("- [ ] one\n- [ ] two"));
+  });
+
+  it("ignores clicks on non-checkbox elements in the preview", async () => {
+    const { container, ta } = await openEditorWithContent("- [ ] one\n\nplain text");
+    await findCheckboxes(container);
+    const para = container.querySelector(".preview p") as HTMLElement;
+    await act(async () => {
+      bubblingClick(para);
+    });
+    expect(ta.value).toBe("- [ ] one\n\nplain text");
+  });
+});
+
 // ===========================================================================
 // CHECKBOX TOGGLE LOGIC (pure unit tests, browser-environment-independent)
 // ===========================================================================

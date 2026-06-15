@@ -303,11 +303,11 @@ export default function App() {
     return { ok: true };
   }
 
-  async function passkeyLogin(useBrowserAutofill = false): Promise<void> {
+  async function passkeyLogin(): Promise<void> {
     const optRes = await api("/passkey/auth/options", { method: "POST" });
     if (!optRes.ok) throw new Error("options failed");
     const options = await optRes.json() as PublicKeyCredentialRequestOptionsJSON;
-    const authResp = await startAuthentication({ optionsJSON: options, ...(useBrowserAutofill ? { useBrowserAutofill: true } : {}) });
+    const authResp = await startAuthentication({ optionsJSON: options });
     const verRes = await api("/passkey/auth/verify", {
       method: "POST",
       body: JSON.stringify({ response: authResp, challenge: options.challenge }),

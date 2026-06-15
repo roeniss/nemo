@@ -6,10 +6,19 @@ import { D1 } from "./d1";
 const PW_HASH = await hashPassword("pw");
 
 const SCHEMA = `
+CREATE TABLE users (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  username TEXT NOT NULL UNIQUE,
+  password_hash TEXT NOT NULL,
+  is_admin INTEGER NOT NULL DEFAULT 0,
+  created_at INTEGER NOT NULL,
+  last_login_at INTEGER
+);
 CREATE TABLE memos (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   title TEXT NOT NULL DEFAULT 'Untitled',
   content TEXT NOT NULL DEFAULT '',
+  user_id INTEGER NOT NULL,
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL,
   deleted_at INTEGER,
@@ -26,10 +35,14 @@ CREATE TABLE memo_versions (
 
 let env: Record<string, unknown>;
 
-beforeEach(() => {
+beforeEach(async () => {
   const db = new D1();
   db.exec(SCHEMA);
-  env = { DB: db, AUTH_USER: "tester", AUTH_PASS: PW_HASH, JWT_SECRET: "test-secret" };
+  env = { DB: db, JWT_SECRET: "test-secret" };
+  // Seed a user
+  await db.prepare(
+    "INSERT INTO users (id, username, password_hash, is_admin, created_at) VALUES (1, ?, ?, 1, ?)"
+  ).bind("tester", PW_HASH, Date.now()).run();
 });
 
 const req = (path: string, init?: RequestInit) => app.request(path, init, env as never);
@@ -162,7 +175,7 @@ describe("memos", () => {
     await req(`/api/memos/${c.id}/hide`, { method: "POST", headers: h });
     expect(await (await req("/api/trash", { headers: h })).json()).toHaveLength(0);
     // row is still in the DB — not a real delete
-    const row = await env.DB!.prepare("SELECT id FROM memos WHERE id = ?").bind(c.id).first();
+    const row = await (env.DB as D1).prepare("SELECT id FROM memos WHERE id = ?").bind(c.id).first();
     expect(row).not.toBeNull();
   });
 
@@ -171,8 +184,41 @@ describe("memos", () => {
     const c = await (await req("/api/memos", { method: "POST", headers: h })).json();
     await req(`/api/memos/${c.id}?purge=1`, { method: "DELETE", headers: h });
     expect(await (await req("/api/trash", { headers: h })).json()).toHaveLength(0);
-    const row = await env.DB!.prepare("SELECT id FROM memos WHERE id = ?").bind(c.id).first();
+    const row = await (env.DB as D1).prepare("SELECT id FROM memos WHERE id = ?").bind(c.id).first();
     expect(row).toBeNull();
+  });
+
+  it("user A cannot access user B's memos", async () => {
+    const db = env.DB as D1;
+    // Seed user 2
+    const pw2 = await hashPassword("pw2");
+    await db.prepare(
+      "INSERT INTO users (id, username, password_hash, is_admin, created_at) VALUES (2, ?, ?, 0, ?)"
+    ).bind("tester2", pw2, Date.now()).run();
+
+    // User 1 creates a memo
+    const h1 = await authedHeaders();
+    const memo = await (await req("/api/memos", { method: "POST", headers: h1 })).json();
+    await req(`/api/memos/${memo.id}`, {
+      method: "PUT",
+      headers: h1,
+      body: JSON.stringify({ content: "# Secret", base: memo.updated_at }),
+    });
+
+    // User 2 logs in
+    const r2 = await req("/api/login", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ username: "tester2", password: "pw2" }),
+    });
+    const h2 = { "content-type": "application/json", cookie: cookieOf(r2) };
+
+    // User 2 cannot see user 1's memo in list
+    const list = await (await req("/api/memos", { headers: h2 })).json() as unknown[];
+    expect(list).toHaveLength(0);
+
+    // User 2 cannot fetch user 1's memo directly
+    expect((await req(`/api/memos/${memo.id}`, { headers: h2 })).status).toBe(404);
   });
 });
 
@@ -235,8 +281,8 @@ describe("history (session snapshots)", () => {
   // (title is kept in sync with content, mirroring what a real PUT would store)
   const backdate = (id: number, created_at: number, updated_at: number, content: string) => {
     const title = content.split("\n")[0].replace(/^#+\s*/, "") || "Untitled";
-    return env
-      .DB!.prepare(
+    return (env.DB as D1)
+      .prepare(
         "UPDATE memos SET created_at = ?, updated_at = ?, content = ?, title = ? WHERE id = ?"
       )
       .bind(created_at, updated_at, content, title, id)
@@ -244,9 +290,10 @@ describe("history (session snapshots)", () => {
   };
   const versions = async (id: number) =>
     (
-      await env.DB!.prepare(
-        "SELECT * FROM memo_versions WHERE memo_id = ? ORDER BY created_at DESC"
-      )
+      await (env.DB as D1)
+        .prepare(
+          "SELECT * FROM memo_versions WHERE memo_id = ? ORDER BY created_at DESC"
+        )
         .bind(id)
         .all()
     ).results as Array<{ title: string; content: string; created_at: number }>;

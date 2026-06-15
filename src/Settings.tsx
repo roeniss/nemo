@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { startRegistration } from "@simplewebauthn/browser";
 import type { PublicKeyCredentialCreationOptionsJSON } from "@simplewebauthn/browser";
 import { api } from "./lib";
+import { aaguidToName } from "./aaguids";
 
 type TokenMeta = {
   id: number;
@@ -12,12 +13,22 @@ type TokenMeta = {
   last_used_at: number | null;
 };
 
+type PasskeyMeta = {
+  credential_id: string;
+  aaguid?: string | null;
+  created_at: number;
+};
+
+const fmtDate = (ms: number) =>
+  new Date(ms).toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
+
 export function Settings({ flash, onLogout }: { flash: (msg: string) => void; onLogout?: () => void }) {
   const [tokens, setTokens] = useState<TokenMeta[]>([]);
   const [label, setLabel] = useState("");
   const [created, setCreated] = useState<string | null>(null); // plaintext, shown once
   const [loading, setLoading] = useState(true);
   const [passkeyMsg, setPasskeyMsg] = useState<string | null>(null);
+  const [passkeys, setPasskeys] = useState<PasskeyMeta[]>([]);
 
   async function load() {
     try {
@@ -28,6 +39,22 @@ export function Settings({ flash, onLogout }: { flash: (msg: string) => void; on
     } finally {
       setLoading(false);
     }
+    await loadPasskeys();
+  }
+
+  async function loadPasskeys() {
+    try {
+      const r = await api("/passkey/credentials");
+      const data = r.ok ? await r.json() : [];
+      setPasskeys(Array.isArray(data) ? data : []);
+    } catch {
+      setPasskeys([]);
+    }
+  }
+
+  async function deletePasskey(credentialId: string) {
+    await api(`/passkey/credentials/${encodeURIComponent(credentialId)}`, { method: "DELETE" });
+    await loadPasskeys();
   }
 
   useEffect(() => {
@@ -72,6 +99,7 @@ export function Settings({ flash, onLogout }: { flash: (msg: string) => void; on
       });
       if (verRes.ok) {
         setPasskeyMsg("Passkey registered successfully.");
+        await loadPasskeys();
       } else {
         setPasskeyMsg("Passkey registration failed.");
       }
@@ -131,6 +159,21 @@ export function Settings({ flash, onLogout }: { flash: (msg: string) => void; on
       <p className="muted">Register a passkey (fingerprint, Face ID, or hardware key) as an additional login option.</p>
       <button onClick={registerPasskey}>Passkey 등록</button>
       {passkeyMsg && <p className="muted">{passkeyMsg}</p>}
+
+      <ul className="passkey-list">
+        {passkeys.map((pk) => (
+          <li key={pk.credential_id}>
+            <span className="token-label">{aaguidToName(pk.aaguid)}</span>
+            <span className="muted">Registered: {fmtDate(pk.created_at)}</span>
+            <button className="del" onClick={() => deletePasskey(pk.credential_id)}>
+              Delete
+            </button>
+          </li>
+        ))}
+        {passkeys.length === 0 && (
+          <li className="empty">{loading ? "Loading…" : "No passkeys yet"}</li>
+        )}
+      </ul>
 
       {onLogout && (
         <div className="settings-logout">

@@ -20,6 +20,7 @@ CREATE TABLE webauthn_credentials (
   public_key TEXT NOT NULL,
   counter INTEGER NOT NULL DEFAULT 0,
   transports TEXT,
+  aaguid TEXT,
   created_at INTEGER NOT NULL
 );
 CREATE TABLE webauthn_challenges (
@@ -78,6 +79,7 @@ vi.mock("@simplewebauthn/server", async (importOriginal) => {
     verifyRegistrationResponse: vi.fn().mockResolvedValue({
       verified: true,
       registrationInfo: {
+        aaguid: "fbfc3007-154e-4ecc-8032-51d60de6b4c2",
         credential: {
           id: "mock-cred-id",
           publicKey: new Uint8Array([1, 2, 3]),
@@ -340,12 +342,13 @@ describe("POST /api/passkey/register/verify (JWT-protected)", () => {
     expect(r.status).toBe(200);
     expect((await r.json() as any).ok).toBe(true);
 
-    // Verify credential was stored
+    // Verify credential was stored, including the AAGUID
     const cred = await db
-      .prepare("SELECT credential_id FROM webauthn_credentials WHERE credential_id = ?")
+      .prepare("SELECT credential_id, aaguid FROM webauthn_credentials WHERE credential_id = ?")
       .bind("mock-cred-id")
-      .first<{ credential_id: string }>();
+      .first<{ credential_id: string; aaguid: string | null }>();
     expect(cred?.credential_id).toBe("mock-cred-id");
+    expect(cred?.aaguid).toBe("fbfc3007-154e-4ecc-8032-51d60de6b4c2");
   });
 
   it("returns 400 when verifyRegistrationResponse throws", async () => {
@@ -403,5 +406,46 @@ describe("POST /api/passkey/register/verify (JWT-protected)", () => {
       body: JSON.stringify({ response: {}, challenge: "unverified-challenge" }),
     });
     expect(r.status).toBe(400);
+  });
+});
+
+describe("passkey credential management", () => {
+  async function insertCred(id: string, aaguid: string | null, createdAt = Date.now()) {
+    await db
+      .prepare(
+        `INSERT INTO webauthn_credentials (credential_id, public_key, counter, transports, aaguid, created_at)
+         VALUES (?, ?, ?, ?, ?, ?)`
+      )
+      .bind(id, "pk", 0, null, aaguid, createdAt)
+      .run();
+  }
+
+  it("GET /api/passkey/credentials lists credentials with aaguid", async () => {
+    await insertCred("cred-a", "fbfc3007-154e-4ecc-8032-51d60de6b4c2", 100);
+    await insertCred("cred-b", null, 200);
+    const h = await authedHeaders();
+    const r = await req("/api/passkey/credentials", { headers: h });
+    expect(r.status).toBe(200);
+    const list = (await r.json()) as Array<{ credential_id: string; aaguid: string | null }>;
+    expect(list).toHaveLength(2);
+    expect(list[0].credential_id).toBe("cred-b"); // newest first
+    expect(list[1].aaguid).toBe("fbfc3007-154e-4ecc-8032-51d60de6b4c2");
+  });
+
+  it("GET /api/passkey/credentials requires auth", async () => {
+    const r = await req("/api/passkey/credentials");
+    expect(r.status).toBe(401);
+  });
+
+  it("DELETE /api/passkey/credentials/:id removes the credential", async () => {
+    await insertCred("cred-del", null);
+    const h = await authedHeaders();
+    const r = await req("/api/passkey/credentials/cred-del", { method: "DELETE", headers: h });
+    expect(r.status).toBe(200);
+    const remaining = await db
+      .prepare("SELECT credential_id FROM webauthn_credentials WHERE credential_id = ?")
+      .bind("cred-del")
+      .first();
+    expect(remaining).toBeNull();
   });
 });

@@ -12,7 +12,7 @@ type TokenMeta = {
   last_used_at: number | null;
 };
 
-export function Settings({ flash }: { flash: (msg: string) => void }) {
+export function Settings({ flash, onLogout }: { flash: (msg: string) => void; onLogout?: () => void }) {
   const [tokens, setTokens] = useState<TokenMeta[]>([]);
   const [label, setLabel] = useState("");
   const [created, setCreated] = useState<string | null>(null); // plaintext, shown once
@@ -131,6 +131,12 @@ export function Settings({ flash }: { flash: (msg: string) => void }) {
       <p className="muted">Register a passkey (fingerprint, Face ID, or hardware key) as an additional login option.</p>
       <button onClick={registerPasskey}>Passkey 등록</button>
       {passkeyMsg && <p className="muted">{passkeyMsg}</p>}
+
+      {onLogout && (
+        <div className="settings-logout">
+          <button className="ghost" onClick={onLogout}>로그아웃</button>
+        </div>
+      )}
     </div>
   );
 }

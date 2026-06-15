@@ -154,6 +154,31 @@ describe("Settings — generate / copy / revoke", () => {
   });
 });
 
+describe("Settings — logout", () => {
+  it("renders a logout button when onLogout is provided and calls it on click", async () => {
+    handler = () => json([]);
+    const onLogout = vi.fn();
+    const { container } = render(<Settings flash={vi.fn()} onLogout={onLogout} />);
+    await waitFor(() => expect(container.textContent).toContain("No tokens yet"));
+    const logoutBtn = Array.from(container.querySelectorAll("button")).find(
+      (b) => b.textContent === "로그아웃"
+    ) as HTMLButtonElement;
+    expect(logoutBtn).toBeTruthy();
+    fireEvent.click(logoutBtn);
+    expect(onLogout).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not render a logout button when onLogout is not provided", async () => {
+    handler = () => json([]);
+    const { container } = render(<Settings flash={vi.fn()} />);
+    await waitFor(() => expect(container.textContent).toContain("No tokens yet"));
+    const logoutBtn = Array.from(container.querySelectorAll("button")).find(
+      (b) => b.textContent === "로그아웃"
+    );
+    expect(logoutBtn).toBeFalsy();
+  });
+});
+
 describe("Settings — passkey registration", () => {
   const fakeOptions = {
     challenge: "test-challenge-abc",

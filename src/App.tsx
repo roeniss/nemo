@@ -1125,7 +1125,7 @@ export default function App() {
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
-  if (!authed) return <Login onLogin={login} onPasskeyLogin={passkeyLogin} onConditionalPasskeyLogin={() => passkeyLogin(true)} />;
+  if (!authed) return <Login onLogin={login} onPasskeyLogin={passkeyLogin} />;
 
   return (
     <div className="app">
@@ -1484,11 +1484,9 @@ export default function App() {
 function Login({
   onLogin,
   onPasskeyLogin,
-  onConditionalPasskeyLogin,
 }: {
   onLogin: (u: string, p: string, token: string) => Promise<LoginResult>;
   onPasskeyLogin: () => Promise<void>;
-  onConditionalPasskeyLogin: () => Promise<void>;
 }) {
   const [u, setU] = useState("");
   const [p, setP] = useState("");
@@ -1496,13 +1494,10 @@ function Login({
   const [token, setToken] = useState("");
   const widget = useRef<HTMLDivElement>(null);
 
-  // WebAuthn conditional UI: silently offer passkeys via browser autofill on mount.
-  // Any error (no passkeys, user cancels, browser doesn't support it) is swallowed
-  // so the normal login form stays fully usable.
+  // Immediately show the passkey picker modal on mount.
+  // Silently ignored if no passkeys available, user cancels, or browser unsupported.
   useEffect(() => {
-    onConditionalPasskeyLogin().catch(() => {
-      // silently ignore: no passkeys registered, user dismissed, browser unsupported, etc.
-    });
+    onPasskeyLogin().catch(() => {});
   }, []);
 
   // load + render the Turnstile widget (only when a site key is configured)

@@ -70,7 +70,6 @@ button.ghost {
 }
 .settings-logout {
   margin-top: 2rem;
-  border-top: 1px solid var(--border);
   padding-top: 1rem;
 }
 .settings-logout button {

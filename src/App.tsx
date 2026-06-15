@@ -12,6 +12,7 @@ import {
   NEW_DOC,
   SAVE_DEBOUNCE,
   SAVE_MAX_WAIT,
+  SEARCH_DEBOUNCE,
   api,
   titleFrom,
   isBlank,
@@ -61,6 +62,11 @@ export default function App() {
   const [viewing, setViewing] = useState<Memo | null>(null); // trashed memo open in read-only view
   const [query, setQuery] = useState("");
   const [keyword, setKeyword] = useState<string | null>(null); // selected filter badge
+  // server-side body-search hits, keyed by the query they belong to so a response
+  // that lands after the box has moved on is simply ignored (its `q` won't match)
+  const [bodyHits, setBodyHits] = useState<{ q: string; ids: Set<number> }>(
+    { q: "", ids: new Set() }
+  );
   const [undo, setUndo] = useState<{ id: number; title: string } | null>(null);
   const undoTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const loadedAt = useRef(0); // updated_at of the currently open memo (for sync)
@@ -886,12 +892,34 @@ export default function App() {
   // data-source-line blocks) lands, the caret has usually moved on. Re-center on
   // every render so the preview catches up to where the caret now is.
   useEffect(syncPreviewToCaret, [html]);
+  // debounced server-side body search: the sidebar list only holds titles, so
+  // matching memo *content* has to ask the server. Title matching stays local and
+  // instant below; this just folds in the extra body hits once they arrive.
+  useEffect(() => {
+    const q = query.trim();
+    if (!q) return;
+    const t = setTimeout(() => {
+      api(`/search?q=${encodeURIComponent(q)}`)
+        .then((r) => (r.ok ? (r.json() as Promise<MemoMeta[]>) : []))
+        .catch(() => []) // offline — local title matching below still applies
+        .then((rows) => setBodyHits({ q, ids: new Set(rows.map((m) => m.id)) }));
+    }, SEARCH_DEBOUNCE);
+    return () => clearTimeout(t);
+  }, [query]);
+
   // memos surviving the search text — also the population the badge bar is built
   // from, so every keyword stays visible/clickable even once one is selected.
   const searchMatched = useMemo(() => {
-    const q = query.trim().toLowerCase();
-    return q ? memos.filter((m) => m.title.toLowerCase().includes(q)) : memos;
-  }, [memos, query]);
+    const q = query.trim();
+    if (!q) return memos;
+    const ql = q.toLowerCase();
+    // only trust body hits fetched for THIS exact query (else a stale/in-flight
+    // response would filter against the wrong term)
+    const ids = bodyHits.q === q ? bodyHits.ids : null;
+    return memos.filter(
+      (m) => m.title.toLowerCase().includes(ql) || (ids != null && ids.has(m.id))
+    );
+  }, [memos, query, bodyHits]);
   const badges = useMemo(() => keywordsOf(searchMatched), [searchMatched]);
   // ignore a selected badge that the current search has filtered away, so the
   // list never dead-ends to empty; the badge re-applies if the search widens.
@@ -974,7 +1002,7 @@ export default function App() {
             <>
               <input
                 className="search"
-                placeholder="Search title…"
+                placeholder="Search title & body…"
                 value={query}
                 onChange={(e) => setQuery(e.currentTarget.value)}
               />

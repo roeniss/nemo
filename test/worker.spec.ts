@@ -161,6 +161,55 @@ describe("memos", () => {
   });
 });
 
+describe("search", () => {
+  const mk = async (h: HeadersInit, content: string) => {
+    const c = await (await req("/api/memos", { method: "POST", headers: h })).json();
+    await req(`/api/memos/${c.id}`, {
+      method: "PUT",
+      headers: h,
+      body: JSON.stringify({ content, base: c.updated_at }),
+    });
+    return c.id as number;
+  };
+  const search = async (h: HeadersInit, q: string) =>
+    (await (await req(`/api/search?q=${encodeURIComponent(q)}`, { headers: h })).json()) as {
+      id: number;
+    }[];
+
+  it("matches by title and by body, excluding non-matches", async () => {
+    const h = await authedHeaders();
+    const byTitle = await mk(h, "# Banana bread\nplain instructions");
+    const byBody = await mk(h, "# Dessert\nmash one ripe banana into the bowl");
+    const miss = await mk(h, "# Cherry pie\nno yellow fruit here");
+
+    const ids = (await search(h, "banana")).map((m) => m.id);
+    expect(ids).toContain(byTitle); // title hit
+    expect(ids).toContain(byBody); // body-only hit
+    expect(ids).not.toContain(miss);
+  });
+
+  it("excludes trashed memos from results", async () => {
+    const h = await authedHeaders();
+    const id = await mk(h, "# keepaway\na secret pineapple note");
+    await req(`/api/memos/${id}`, { method: "DELETE", headers: h }); // soft delete
+    expect(await search(h, "pineapple")).toHaveLength(0);
+  });
+
+  it("returns nothing for a blank query and treats LIKE wildcards literally", async () => {
+    const h = await authedHeaders();
+    await mk(h, "# plain\nordinary body");
+    expect(await search(h, "")).toEqual([]);
+    expect(await (await req("/api/search", { headers: h })).json()).toEqual([]); // no q param at all
+    expect(await search(h, "   ")).toEqual([]); // whitespace-only trims to blank
+    // an unescaped "%" would match everything — escaped, it matches a literal percent
+    expect(await search(h, "%")).toHaveLength(0);
+  });
+
+  it("requires authentication", async () => {
+    expect((await req("/api/search?q=x")).status).toBe(401);
+  });
+});
+
 describe("history (session snapshots)", () => {
   const HOUR = 60 * 60 * 1000;
   const create = async (h: HeadersInit) =>

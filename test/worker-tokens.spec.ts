@@ -6,10 +6,19 @@ import { D1 } from "./d1";
 const PW_HASH = await hashPassword("pw");
 
 const SCHEMA = `
+CREATE TABLE users (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  username TEXT NOT NULL UNIQUE,
+  password_hash TEXT NOT NULL,
+  is_admin INTEGER NOT NULL DEFAULT 0,
+  created_at INTEGER NOT NULL,
+  last_login_at INTEGER
+);
 CREATE TABLE memos (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   title TEXT NOT NULL DEFAULT 'Untitled',
   content TEXT NOT NULL DEFAULT '',
+  user_id INTEGER NOT NULL,
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL,
   deleted_at INTEGER,
@@ -19,6 +28,7 @@ CREATE TABLE api_tokens (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   label TEXT NOT NULL DEFAULT '',
   token_hash TEXT NOT NULL UNIQUE,
+  user_id INTEGER NOT NULL,
   created_at INTEGER NOT NULL,
   last_used_at INTEGER,
   revoked_at INTEGER
@@ -27,10 +37,14 @@ CREATE TABLE api_tokens (
 
 let env: Record<string, unknown>;
 
-beforeEach(() => {
+beforeEach(async () => {
   const db = new D1();
   db.exec(SCHEMA);
-  env = { DB: db, AUTH_USER: "tester", AUTH_PASS: PW_HASH, JWT_SECRET: "test-secret" };
+  env = { DB: db, JWT_SECRET: "test-secret" };
+  // Seed a user
+  await db.prepare(
+    "INSERT INTO users (id, username, password_hash, is_admin, created_at) VALUES (1, ?, ?, 1, ?)"
+  ).bind("tester", PW_HASH, Date.now()).run();
 });
 
 const req = (path: string, init?: RequestInit) => app.request(path, init, env as never);

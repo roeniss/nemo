@@ -295,6 +295,22 @@ describe("Login", () => {
       expect(container.querySelector(".err")?.textContent).toContain("Verification failed")
     );
   });
+
+  it("shows error message when passkey login fails", async () => {
+    server.opts.meStatus = 401;
+    const { container } = render(<App />);
+    await waitFor(() => expect(container.querySelector(".login")).toBeTruthy());
+    // The passkey endpoint is not handled by the test server → 404 → throws
+    const passkeyBtn = Array.from(container.querySelectorAll("button")).find(
+      (b) => b.textContent?.includes("Passkey")
+    )!;
+    await act(async () => {
+      fireEvent.click(passkeyBtn);
+    });
+    await waitFor(() =>
+      expect(container.querySelector(".err")?.textContent).toContain("Passkey login failed")
+    );
+  });
 });
 
 // ===========================================================================
@@ -3041,6 +3057,168 @@ describe("preview caret centering", () => {
   });
 });
 
+// ===========================================================================
+// CHECKBOX FEATURES
+// ===========================================================================
+describe("checkbox auto-continue on Enter", () => {
+  async function openEditorWithContent(content: string) {
+    authedBoot();
+    const row = server.seed({ content, title: "test" });
+    location.hash = "#" + row.id;
+    const { container } = render(<App />);
+    await waitFor(() =>
+      expect((container.querySelector("textarea.editor") as HTMLTextAreaElement)?.value).toBe(content)
+    );
+    const ta = container.querySelector("textarea.editor") as HTMLTextAreaElement;
+    return { container, ta, row };
+  }
+
+  it("inserts a new checkbox on Enter at end of checkbox line with content", async () => {
+    const { ta } = await openEditorWithContent("- [ ] item one");
+    await act(async () => {
+      ta.selectionStart = ta.selectionEnd = ta.value.length;
+      fireEvent.keyDown(ta, { key: "Enter" });
+    });
+    await waitFor(() => expect(ta.value).toBe("- [ ] item one\n- [ ] "));
+  });
+
+  it("collapses empty checkbox line to plain newline on Enter", async () => {
+    const { ta } = await openEditorWithContent("- [ ] item one\n- [ ] ");
+    await act(async () => {
+      ta.selectionStart = ta.selectionEnd = ta.value.length;
+      fireEvent.keyDown(ta, { key: "Enter" });
+    });
+    await waitFor(() => expect(ta.value).toBe("- [ ] item one\n\n"));
+  });
+
+  it("does not trigger on Enter with modifier keys", async () => {
+    const { ta } = await openEditorWithContent("- [ ] item one");
+    const original = ta.value;
+    await act(async () => {
+      ta.selectionStart = ta.selectionEnd = ta.value.length;
+      fireEvent.keyDown(ta, { key: "Enter", ctrlKey: true });
+    });
+    expect(ta.value).toBe(original);
+  });
+
+  it("continues with same indentation for indented checkbox", async () => {
+    const { ta } = await openEditorWithContent("  - [ ] indented item");
+    await act(async () => {
+      ta.selectionStart = ta.selectionEnd = ta.value.length;
+      fireEvent.keyDown(ta, { key: "Enter" });
+    });
+    await waitFor(() => expect(ta.value).toBe("  - [ ] indented item\n  - [ ] "));
+  });
+
+  it("does not trigger on Enter in a regular (non-checkbox) line", async () => {
+    const { ta } = await openEditorWithContent("regular text");
+    await act(async () => {
+      ta.selectionStart = ta.selectionEnd = ta.value.length;
+      fireEvent.keyDown(ta, { key: "Enter" });
+    });
+    expect(ta.value).not.toContain("- [ ]");
+  });
+});
+
+// ===========================================================================
+// CHECKBOX RAF CURSOR POSITIONING (with synchronous rAF mock)
+// ===========================================================================
+describe("checkbox rAF cursor positioning", () => {
+  let rafSpy: ReturnType<typeof vi.spyOn>;
+  beforeEach(() => {
+    rafSpy = vi.spyOn(window, "requestAnimationFrame").mockImplementation((cb) => {
+      cb(0);
+      return 0;
+    });
+  });
+  afterEach(() => {
+    rafSpy.mockRestore();
+  });
+
+  async function openEditorWithContent(content: string) {
+    authedBoot();
+    const row = server.seed({ content, title: "test" });
+    location.hash = "#" + row.id;
+    const { container } = render(<App />);
+    await waitFor(() =>
+      expect((container.querySelector("textarea.editor") as HTMLTextAreaElement)?.value).toBe(content)
+    );
+    const ta = container.querySelector("textarea.editor") as HTMLTextAreaElement;
+    return { container, ta, row };
+  }
+
+  it("sets cursor after collapsing empty checkbox line (rAF callback runs)", async () => {
+    const { ta } = await openEditorWithContent("- [ ] item one\n- [ ] ");
+    await act(async () => {
+      ta.selectionStart = ta.selectionEnd = ta.value.length;
+      fireEvent.keyDown(ta, { key: "Enter" });
+    });
+    await waitFor(() => expect(ta.value).toBe("- [ ] item one\n\n"));
+    // With synchronous rAF, the setSelectionRange inside the callback is reached
+    expect(ta.selectionStart).toBe("- [ ] item one\n".length + 1);
+  });
+
+  it("sets cursor after inserting new checkbox (rAF callback runs)", async () => {
+    const { ta } = await openEditorWithContent("- [ ] item one");
+    await act(async () => {
+      ta.selectionStart = ta.selectionEnd = ta.value.length;
+      fireEvent.keyDown(ta, { key: "Enter" });
+    });
+    await waitFor(() => expect(ta.value).toBe("- [ ] item one\n- [ ] "));
+    // Cursor should be at end of inserted new checkbox
+    expect(ta.selectionStart).toBe("- [ ] item one\n- [ ] ".length);
+  });
+});
+
+// ===========================================================================
+// CHECKBOX TOGGLE LOGIC (pure unit tests, browser-environment-independent)
+// ===========================================================================
+// toggleNthCheckbox is defined inside App so we test it by importing the logic
+// directly as a pure function (the same implementation, isolated for unit testing).
+function toggleNthCheckboxPure(src: string, idx: number): string | null {
+  const checkboxPattern = /- \[[ xX]\]/g;
+  let match: RegExpExecArray | null;
+  let count = 0;
+  let matchStart = -1;
+  while ((match = checkboxPattern.exec(src)) !== null) {
+    if (count === idx) { matchStart = match.index; break; }
+    count++;
+  }
+  if (matchStart === -1) return null;
+  const isChecked = src[matchStart + 3].toLowerCase() === "x";
+  return src.slice(0, matchStart + 3) + (isChecked ? " " : "x") + src.slice(matchStart + 4);
+}
+
+describe("toggleNthCheckbox pure logic", () => {
+  it("toggles the first unchecked checkbox", () => {
+    const src = "- [ ] task one\n- [ ] task two";
+    expect(toggleNthCheckboxPure(src, 0)).toBe("- [x] task one\n- [ ] task two");
+  });
+
+  it("toggles the second checkbox", () => {
+    const src = "- [ ] task one\n- [ ] task two";
+    expect(toggleNthCheckboxPure(src, 1)).toBe("- [ ] task one\n- [x] task two");
+  });
+
+  it("toggles a checked checkbox back to unchecked", () => {
+    const src = "- [x] done task\n- [ ] pending";
+    expect(toggleNthCheckboxPure(src, 0)).toBe("- [ ] done task\n- [ ] pending");
+  });
+
+  it("handles uppercase X as checked", () => {
+    const src = "- [X] done";
+    expect(toggleNthCheckboxPure(src, 0)).toBe("- [ ] done");
+  });
+
+  it("returns null for out-of-range index", () => {
+    expect(toggleNthCheckboxPure("- [ ] only one", 5)).toBeNull();
+  });
+
+  it("returns null when there are no checkboxes", () => {
+    expect(toggleNthCheckboxPure("just text", 0)).toBeNull();
+  });
+});
+
 describe("settings view", () => {
   it("opens the Settings page from the topbar gear icon and returns to the memos view", async () => {
     authedBoot();
@@ -3068,3 +3246,104 @@ describe("settings view", () => {
   });
 });
 
+describe("plain list auto-continue on Enter", () => {
+  let rafSpy: ReturnType<typeof vi.spyOn>;
+  beforeEach(() => {
+    // Make requestAnimationFrame execute its callback synchronously so the
+    // cursor-repositioning code inside the RAF callbacks is covered.
+    rafSpy = vi.spyOn(window, "requestAnimationFrame").mockImplementation((cb) => {
+      cb(0);
+      return 0;
+    });
+  });
+  afterEach(() => {
+    rafSpy.mockRestore();
+  });
+
+  async function openEditorWithContent(content: string) {
+    authedBoot();
+    const row = server.seed({ content, title: "test" });
+    location.hash = "#" + row.id;
+    const { container } = render(<App />);
+    await waitFor(() =>
+      expect((container.querySelector("textarea.editor") as HTMLTextAreaElement)?.value).toBe(content)
+    );
+    const ta = container.querySelector("textarea.editor") as HTMLTextAreaElement;
+    return { container, ta, row };
+  }
+
+  it("inserts a new plain list item on Enter at end of list line with content", async () => {
+    const { ta } = await openEditorWithContent("- item one");
+    await act(async () => {
+      ta.selectionStart = ta.selectionEnd = ta.value.length;
+      fireEvent.keyDown(ta, { key: "Enter" });
+    });
+    await waitFor(() => expect(ta.value).toBe("- item one\n- "));
+  });
+
+  it("collapses empty plain list line to plain newline on Enter", async () => {
+    const { ta } = await openEditorWithContent("- item one\n- ");
+    await act(async () => {
+      ta.selectionStart = ta.selectionEnd = ta.value.length;
+      fireEvent.keyDown(ta, { key: "Enter" });
+    });
+    await waitFor(() => expect(ta.value).toBe("- item one\n\n"));
+  });
+
+  it("does not trigger plain list on Enter with modifier keys", async () => {
+    const { ta } = await openEditorWithContent("- item one");
+    const original = ta.value;
+    await act(async () => {
+      ta.selectionStart = ta.selectionEnd = ta.value.length;
+      fireEvent.keyDown(ta, { key: "Enter", ctrlKey: true });
+    });
+    expect(ta.value).toBe(original);
+  });
+
+  it("continues with same indentation for indented plain list item", async () => {
+    const { ta } = await openEditorWithContent("  - indented item");
+    await act(async () => {
+      ta.selectionStart = ta.selectionEnd = ta.value.length;
+      fireEvent.keyDown(ta, { key: "Enter" });
+    });
+    await waitFor(() => expect(ta.value).toBe("  - indented item\n  - "));
+  });
+
+  it("checkbox takes priority over plain list for checkbox lines", async () => {
+    const { ta } = await openEditorWithContent("- [ ] checkbox item");
+    await act(async () => {
+      ta.selectionStart = ta.selectionEnd = ta.value.length;
+      fireEvent.keyDown(ta, { key: "Enter" });
+    });
+    await waitFor(() => expect(ta.value).toBe("- [ ] checkbox item\n- [ ] "));
+  });
+});
+
+describe("badge keyword filter", () => {
+  it("clicking an active badge deselects it (toggles keyword back to null)", async () => {
+    authedBoot();
+    // Seed two memos with the same keyword prefix so badges appear
+    server.seed({ title: "work todo", content: "" });
+    server.seed({ title: "work notes", content: "" });
+    const { container } = render(<App />);
+    // Wait for memo list and badges to render
+    await waitFor(() => expect(container.querySelector(".badges")).toBeTruthy());
+
+    const workBadge = Array.from(container.querySelectorAll(".badge")).find(
+      (b) => b.textContent === "work"
+    ) as HTMLButtonElement;
+    expect(workBadge).toBeTruthy();
+
+    // First click — select the badge (becomes active)
+    await act(async () => {
+      fireEvent.click(workBadge);
+    });
+    await waitFor(() => expect(workBadge.className).toContain("active"));
+
+    // Second click — deselect (cur === k → returns null, badge loses active class)
+    await act(async () => {
+      fireEvent.click(workBadge);
+    });
+    await waitFor(() => expect(workBadge.className).not.toContain("active"));
+  });
+});

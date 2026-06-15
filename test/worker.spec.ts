@@ -81,6 +81,21 @@ describe("password hashing", () => {
     expect(await verifyPassword("pw", "pw")).toBe(false);
     expect(await verifyPassword("pw", "pbkdf2:100000:bad")).toBe(false);
   });
+
+  it("fails closed when pbkdf2 throws (e.g. absurdly high iteration count)", async () => {
+    // A well-formed pbkdf2: string but with an iteration count so high the
+    // runtime rejects it — exercises the catch branch at line ~115.
+    const badHash = `pbkdf2:999999999999:c2FsdA==:aGFzaA==`;
+    expect(await verifyPassword("pw", badHash)).toBe(false);
+  });
+
+  it("returns false when stored hash decodes to different length (timingSafeEqual length guard)", async () => {
+    // pbkdf2 always produces 32 bytes; encode only 1 byte so lengths differ
+    const saltB64 = btoa(String.fromCharCode(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16));
+    const shortHashB64 = btoa("x"); // 1 byte, not 32
+    const stored = `pbkdf2:100000:${saltB64}:${shortHashB64}`;
+    expect(await verifyPassword("pw", stored)).toBe(false);
+  });
 });
 
 describe("memos", () => {

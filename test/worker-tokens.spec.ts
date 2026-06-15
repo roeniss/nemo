@@ -177,6 +177,16 @@ describe("integration surface /api/ext/memos (Bearer-gated)", () => {
     expect((await ext(body.token)).status).toBe(400);
   });
 
+  it("keeps existing heading prefix when content already starts with #", async () => {
+    const { body } = await mint("siri");
+    const r = await ext(body.token, { content: "# My Note" });
+    expect(r.status).toBe(201);
+    const memo = await (env.DB as D1)
+      .prepare("SELECT title, content FROM memos ORDER BY id DESC LIMIT 1")
+      .first<{ title: string; content: string }>();
+    expect(memo?.content).toBe("# My Note");
+  });
+
   it("returns a unified 404 for an authenticated wrong method/path", async () => {
     const { body } = await mint("siri");
     // valid token but GET (no route) → gate passes → catch-all

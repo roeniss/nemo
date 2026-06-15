@@ -487,6 +487,13 @@ input {
 .markdown img {
   max-width: 100%;
 }
+.markdown input[type="checkbox"] {
+  cursor: pointer;
+  width: 14px;
+  height: 14px;
+  margin-right: 4px;
+  pointer-events: auto;
+}
 
 /* mobile: editor only, hide the preview pane */
 @media (max-width: 640px) {

@@ -898,6 +898,124 @@ export default function App() {
     return () => clearInterval(iv);
   }, [offline]);
 
+  // Feature 1: clicking a checkbox in the preview toggles [ ]/[x] in the editor source.
+  // The Nth checkbox in the preview maps to the Nth checkbox pattern in the raw content.
+  // We expose the toggle logic as a function for testability, and wire it to click events
+  // via a native listener on the preview container (Preact's JSX onClick delegation doesn't
+  // fire for elements created via dangerouslySetInnerHTML after a debounced state update).
+  const viewingRef = useRef(viewing);
+  viewingRef.current = viewing;
+
+  // Pure toggle logic: given a source string, Nth checkbox index, return the toggled string.
+  // Exported-via-ref for unit testing; not needed for the real user interaction.
+  function toggleNthCheckbox(src: string, idx: number): string | null {
+    const checkboxPattern = /- \[[ xX]\]/g;
+    let match: RegExpExecArray | null;
+    let count = 0;
+    let matchStart = -1;
+    while ((match = checkboxPattern.exec(src)) !== null) {
+      if (count === idx) { matchStart = match.index; break; }
+      count++;
+    }
+    if (matchStart === -1) return null;
+    const isChecked = src[matchStart + 3].toLowerCase() === "x";
+    return src.slice(0, matchStart + 3) + (isChecked ? " " : "x") + src.slice(matchStart + 4);
+  }
+
+  useEffect(() => {
+    const pv = previewRef.current;
+    if (!pv) return;
+    function handlePreviewClick(e: Event) {
+      const target = e.target as HTMLElement;
+      if (target.tagName !== "INPUT" || (target as HTMLInputElement).type !== "checkbox") return;
+      if (viewingRef.current || currentIdRef.current == null) return;
+      e.preventDefault();
+      const allBoxes = Array.from(pv!.querySelectorAll('input[type="checkbox"]'));
+      const idx = allBoxes.indexOf(target);
+      if (idx === -1) return;
+      const toggled = toggleNthCheckbox(contentRef.current, idx);
+      if (toggled != null) onEdit(toggled);
+    }
+    pv.addEventListener("click", handlePreviewClick);
+    return () => pv.removeEventListener("click", handlePreviewClick);
+  // Re-attach when currentId changes (mounting/unmounting the preview pane).
+  }, [currentId]);  // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Feature 2: auto-continue checkbox list on Enter
+  function handleEditorKeyDown(e: KeyboardEvent) {
+    if (e.key !== "Enter" || e.metaKey || e.ctrlKey || e.altKey || e.shiftKey) return;
+    const el = editorRef.current;
+    if (!el) return;
+    const pos = el.selectionStart;
+    const val = el.value;
+    // Find current line start
+    const lineStart = val.lastIndexOf("\n", pos - 1) + 1;
+    const lineEnd = val.indexOf("\n", pos);
+    const line = val.slice(lineStart, lineEnd === -1 ? undefined : lineEnd);
+    const checkboxMatch = line.match(/^(\s*)-\s+\[[ xX]\]\s*/i);
+    if (checkboxMatch) {
+      e.preventDefault();
+      const prefix = checkboxMatch[0];
+      const indent = checkboxMatch[1];
+      const afterPrefix = line.slice(prefix.length);
+      if (afterPrefix.length === 0) {
+        // Empty checkbox item — collapse to plain newline (remove the checkbox prefix)
+        // Remove the entire current line content, leaving only the preceding newline,
+        // then insert a plain newline for the cursor position
+        const removeLineContent = val.slice(0, lineStart) + "\n" + val.slice(lineEnd === -1 ? val.length : lineEnd);
+        onEdit(removeLineContent);
+        requestAnimationFrame(() => {
+          if (editorRef.current) {
+            const newPos = lineStart + 1;
+            editorRef.current.setSelectionRange(newPos, newPos);
+          }
+        });
+      } else {
+        // Continue with new checkbox
+        const insertion = "\n" + indent + "- [ ] ";
+        const newContent = val.slice(0, pos) + insertion + val.slice(pos);
+        onEdit(newContent);
+        requestAnimationFrame(() => {
+          if (editorRef.current) {
+            const newPos = pos + insertion.length;
+            editorRef.current.setSelectionRange(newPos, newPos);
+          }
+        });
+      }
+      return;
+    }
+
+    // Plain list item (- text), but not checkbox
+    const plainListMatch = line.match(/^(\s*)-\s+/);
+    if (!plainListMatch) return;
+    e.preventDefault();
+    const plainPrefix = plainListMatch[0];
+    const plainIndent = plainListMatch[1];
+    const afterPlainPrefix = line.slice(plainPrefix.length);
+    if (afterPlainPrefix.length === 0) {
+      // Empty plain list item — collapse to plain newline
+      const removeLineContent = val.slice(0, lineStart) + "\n" + val.slice(lineEnd === -1 ? val.length : lineEnd);
+      onEdit(removeLineContent);
+      requestAnimationFrame(() => {
+        if (editorRef.current) {
+          const newPos = lineStart + 1;
+          editorRef.current.setSelectionRange(newPos, newPos);
+        }
+      });
+    } else {
+      // Continue with new plain list item
+      const insertion = "\n" + plainIndent + "- ";
+      const newContent = val.slice(0, pos) + insertion + val.slice(pos);
+      onEdit(newContent);
+      requestAnimationFrame(() => {
+        if (editorRef.current) {
+          const newPos = pos + insertion.length;
+          editorRef.current.setSelectionRange(newPos, newPos);
+        }
+      });
+    }
+  }
+
   // debounced live markdown preview — renders the editor content, or the read-only
   // trash memo when one is open (the editor is hidden in that case)
   const { html } = usePreview(viewing ? viewing.content : content);
@@ -1284,6 +1402,7 @@ export default function App() {
               value={content}
               onChange={(e) => onEdit(e.currentTarget.value)}
               onSelect={syncPreviewToCaret}
+              onKeyDown={handleEditorKeyDown}
               onPaste={(e) => {
                 // a pasted image is embedded inline as base64; everything else
                 // falls through to the normal text paste

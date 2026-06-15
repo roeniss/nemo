@@ -50,6 +50,10 @@ test.describe("memo editing", () => {
     await page.locator(sel.editor).click();
     await page.keyboard.type(`${title}\n\nbody`);
     await expect(page.locator(".status")).toHaveText("Saved");
+    // materialize the new temp to a real server memo — deleting a temp would just
+    // drop it locally (no trash, no Undo), whereas a server memo soft-deletes
+    await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+    await expect(page).toHaveURL(/#\d+$/);
 
     const row = page.locator(`${sel.list}:has(.memo-title:text-is("${title}"))`);
     await expect(row).toBeVisible();

@@ -17,6 +17,12 @@ async function unloadIsBlocked(page: import("@playwright/test").Page) {
 test.describe("unsaved-changes guard", () => {
   test("blocks unload while a save is in flight", async ({ page }) => {
     await blankMemo(page);
+    // materialize the new temp into a real server memo first, so a subsequent edit
+    // triggers a server PUT that can be held in flight (a temp only saves locally)
+    await page.locator(sel.editor).fill("# guard me\n\nfirst");
+    await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+    await expect(page).toHaveURL(/#\d+$/);
+    await expect(page.locator(".status")).toHaveText("Saved");
 
     // hold the PUT open so the editor stays in the "Saving…" state
     let release = () => {};

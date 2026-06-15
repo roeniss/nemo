@@ -20,6 +20,10 @@ test.describe("keyboard shortcuts", () => {
     await page.keyboard.type("Shortcut save\n\nbody");
     await page.keyboard.press("ControlOrMeta+s"); // preventDefault → no native save dialog
     await expect(page.locator(".status")).toHaveText("Saved");
+    // a brand-new memo is a local temp until it materializes; focus pushes it to
+    // the server, where the id turns positive
+    await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+    await expect(page).toHaveURL(/#\d+$/);
     const id = await hashId(page);
     const r = await request.get(`/api/memos/${id}`);
     expect(((await r.json()) as { content: string }).content).toContain("Shortcut save");

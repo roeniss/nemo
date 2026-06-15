@@ -385,25 +385,30 @@ input {
   display: flex;
   gap: 8px;
 }
-.token-list {
+.token-list,
+.passkey-list {
   list-style: none;
   margin: 0;
   padding: 0;
 }
-.token-list li {
+.token-list li,
+.passkey-list li {
   display: flex;
   align-items: center;
   gap: 12px;
   padding: 12px 2px;
   border-bottom: 1px solid var(--border);
 }
-.token-list .token-label {
+.token-list .token-label,
+.passkey-list .token-label {
   font-weight: 600;
 }
-.token-list .muted {
+.token-list .muted,
+.passkey-list .muted {
   margin-left: auto; /* usage state + Revoke sit on the right */
 }
-.token-list li.empty {
+.token-list li.empty,
+.passkey-list li.empty {
   color: var(--fg-faint);
   border-bottom: none;
   justify-content: center;

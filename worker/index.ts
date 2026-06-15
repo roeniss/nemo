@@ -366,21 +366,51 @@ app.post("/api/passkey/register/verify", async (c) => {
     return c.json({ error: "verification failed" }, 400);
   }
 
-  const { credential } = verification.registrationInfo;
+  const { credential, aaguid } = verification.registrationInfo;
   const publicKeyB64 = btoa(String.fromCharCode(...credential.publicKey))
     .replace(/\+/g, "-").replace(/\//g, "_").replace(/=/g, "");
 
   await c.env.DB.prepare(
-    "INSERT OR REPLACE INTO webauthn_credentials (credential_id, public_key, counter, transports, user_id, created_at) VALUES (?, ?, ?, ?, ?, ?)"
+    "INSERT OR REPLACE INTO webauthn_credentials (credential_id, public_key, counter, transports, aaguid, user_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)"
   ).bind(
     credential.id,
     publicKeyB64,
     credential.counter,
     credential.transports ? JSON.stringify(credential.transports) : null,
+    aaguid || null,
     uid,
     Date.now()
   ).run();
 
+  return c.json({ ok: true });
+});
+
+// --- passkey credential management (Settings page, JWT-gated, user-scoped) -
+// these routes are registered before the general /api/* gate, so they need their
+// own JWT middleware (mirrors the passkey/register gate above)
+app.use("/api/passkey/credentials/*", (c, next) =>
+  jwt({ secret: c.env.JWT_SECRET, cookie: COOKIE, alg: "HS256" })(c, next)
+);
+app.use("/api/passkey/credentials", (c, next) =>
+  jwt({ secret: c.env.JWT_SECRET, cookie: COOKIE, alg: "HS256" })(c, next)
+);
+
+// list the authenticated user's registered passkeys with their AAGUID so the UI
+// can show a friendly authenticator name (iCloud Keychain, Windows Hello, ...)
+app.get("/api/passkey/credentials", async (c) => {
+  const { uid } = getUser(c);
+  const { results } = await c.env.DB.prepare(
+    "SELECT credential_id, aaguid, created_at FROM webauthn_credentials WHERE user_id = ? ORDER BY created_at DESC"
+  ).bind(uid).all();
+  return c.json(results);
+});
+
+// remove one of the authenticated user's registered passkeys
+app.delete("/api/passkey/credentials/:id", async (c) => {
+  const { uid } = getUser(c);
+  await c.env.DB.prepare(
+    "DELETE FROM webauthn_credentials WHERE credential_id = ? AND user_id = ?"
+  ).bind(c.req.param("id"), uid).run();
   return c.json({ ok: true });
 });
 

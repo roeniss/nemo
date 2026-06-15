@@ -348,17 +348,18 @@ app.post("/api/passkey/register/verify", async (c) => {
     return c.json({ error: "verification failed" }, 400);
   }
 
-  const { credential } = verification.registrationInfo;
+  const { credential, aaguid } = verification.registrationInfo;
   const publicKeyB64 = btoa(String.fromCharCode(...credential.publicKey))
     .replace(/\+/g, "-").replace(/\//g, "_").replace(/=/g, "");
 
   await c.env.DB.prepare(
-    "INSERT OR REPLACE INTO webauthn_credentials (credential_id, public_key, counter, transports, created_at) VALUES (?, ?, ?, ?, ?)"
+    "INSERT OR REPLACE INTO webauthn_credentials (credential_id, public_key, counter, transports, aaguid, created_at) VALUES (?, ?, ?, ?, ?, ?)"
   ).bind(
     credential.id,
     publicKeyB64,
     credential.counter,
     credential.transports ? JSON.stringify(credential.transports) : null,
+    aaguid || null,
     Date.now()
   ).run();
 
@@ -514,6 +515,24 @@ app.post("/api/tokens", async (c) => {
 app.delete("/api/tokens/:id", async (c) => {
   await c.env.DB.prepare("UPDATE api_tokens SET revoked_at = ? WHERE id = ?")
     .bind(Date.now(), c.req.param("id"))
+    .run();
+  return c.json({ ok: true });
+});
+
+// --- passkey credential management (Settings page, JWT-gated) ------------
+// list registered passkeys with their AAGUID so the UI can show a friendly
+// authenticator name (iCloud Keychain, Windows Hello, ...) instead of raw transports
+app.get("/api/passkey/credentials", async (c) => {
+  const { results } = await c.env.DB.prepare(
+    "SELECT credential_id, aaguid, created_at FROM webauthn_credentials ORDER BY created_at DESC"
+  ).all();
+  return c.json(results);
+});
+
+// remove a registered passkey
+app.delete("/api/passkey/credentials/:id", async (c) => {
+  await c.env.DB.prepare("DELETE FROM webauthn_credentials WHERE credential_id = ?")
+    .bind(c.req.param("id"))
     .run();
   return c.json({ ok: true });
 });

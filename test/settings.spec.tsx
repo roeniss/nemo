@@ -280,3 +280,75 @@ describe("Settings — passkey registration", () => {
     );
   });
 });
+
+describe("Settings — passkey list", () => {
+  it("lists registered passkeys with authenticator name and registration date", async () => {
+    handler = (path, method) => {
+      if (path === "/tokens" && method === "GET") return json([]);
+      if (path === "/passkey/credentials" && method === "GET")
+        return json([
+          { credential_id: "c1", aaguid: "fbfc3007-154e-4ecc-8032-51d60de6b4c2", created_at: 1700000000000 },
+          { credential_id: "c2", aaguid: null, created_at: 1700000000000 },
+          { credential_id: "c3", aaguid: "unknown-aaguid-value", created_at: 1700000000000 },
+        ]);
+      return json({}, 404);
+    };
+
+    const { container } = render(<Settings flash={vi.fn()} />);
+    await waitFor(() => expect(container.querySelectorAll(".passkey-list li").length).toBe(3));
+    expect(container.textContent).toContain("iCloud Keychain"); // known AAGUID
+    expect(container.textContent).toContain("Passkey"); // null + unknown fallback
+    expect(container.textContent).toContain("Registered:");
+  });
+
+  it("shows an empty state when there are no passkeys", async () => {
+    handler = (path, method) => {
+      if (path === "/tokens" && method === "GET") return json([]);
+      if (path === "/passkey/credentials" && method === "GET") return json([]);
+      return json({}, 404);
+    };
+    const { container } = render(<Settings flash={vi.fn()} />);
+    await waitFor(() => expect(container.textContent).toContain("No passkeys yet"));
+  });
+
+  it("falls back to an empty list when credentials response is not an array", async () => {
+    handler = (path, method) => {
+      if (path === "/tokens" && method === "GET") return json([]);
+      if (path === "/passkey/credentials" && method === "GET") return json({ unexpected: true });
+      return json({}, 404);
+    };
+    const { container } = render(<Settings flash={vi.fn()} />);
+    await waitFor(() => expect(container.textContent).toContain("No passkeys yet"));
+  });
+
+  it("falls back to an empty list when credentials request is not ok", async () => {
+    handler = (path, method) => {
+      if (path === "/tokens" && method === "GET") return json([]);
+      if (path === "/passkey/credentials" && method === "GET")
+        return new Response("", { status: 500 });
+      return json({}, 404);
+    };
+    const { container } = render(<Settings flash={vi.fn()} />);
+    await waitFor(() => expect(container.textContent).toContain("No passkeys yet"));
+  });
+
+  it("deletes a passkey and refreshes the list", async () => {
+    let list = [
+      { credential_id: "c1", aaguid: "fbfc3007-154e-4ecc-8032-51d60de6b4c2", created_at: 1700000000000 },
+    ];
+    handler = (path, method) => {
+      if (path === "/tokens" && method === "GET") return json([]);
+      if (path === "/passkey/credentials" && method === "GET") return json(list);
+      if (path.startsWith("/passkey/credentials/") && method === "DELETE") {
+        list = [];
+        return json({ ok: true });
+      }
+      return json({}, 404);
+    };
+
+    const { container } = render(<Settings flash={vi.fn()} />);
+    await waitFor(() => expect(container.textContent).toContain("iCloud Keychain"));
+    fireEvent.click(container.querySelector(".passkey-list .del")!);
+    await waitFor(() => expect(container.textContent).toContain("No passkeys yet"));
+  });
+});

@@ -3056,3 +3056,73 @@ describe("settings view", () => {
   });
 });
 
+
+// ===========================================================================
+// BRANCH COVERAGE — PR #65 gaps
+// ===========================================================================
+
+describe("loginWithPasskey catch branch", () => {
+  it("shows error message when onPasskeyLogin throws", async () => {
+    server.opts.meStatus = 401;
+    const { container } = render(<App />);
+    await waitFor(() => expect(container.querySelector(".login")).toBeTruthy());
+
+    // Override fetch so the passkey auth/options POST throws, causing
+    // passkeyLogin -> onPasskeyLogin to reject -> loginWithPasskey catch branch.
+    const orig = globalThis.fetch as typeof fetch;
+    globalThis.fetch = vi.fn(async (input: any, init: any) => {
+      if (String(input).includes("/passkey/auth/options")) {
+        throw new Error("passkey unavailable");
+      }
+      return orig(input, init);
+    }) as unknown as typeof fetch;
+
+    const passkeyBtn = Array.from(container.querySelectorAll("button")).find(
+      (b) => b.textContent?.includes("Passkey")
+    )!;
+    await act(async () => {
+      fireEvent.click(passkeyBtn);
+    });
+    await waitFor(() =>
+      expect(container.querySelector(".err")?.textContent).toContain("Passkey login failed")
+    );
+  });
+});
+
+describe("RAF editorRef.current null branch", () => {
+  it("handles the RAF callback when editorRef.current is null (no crash)", async () => {
+    authedBoot();
+    const row = server.seed({ title: "RafNull", content: "# RafNull\n\nitem" });
+    location.hash = "#" + row.id;
+    const { container } = render(<App />);
+    await waitFor(() => expect(container.querySelector("textarea.editor")).toBeTruthy());
+    const ta = container.querySelector("textarea.editor") as HTMLTextAreaElement;
+
+    // Capture the RAF callback
+    let rafCb: FrameRequestCallback | null = null;
+    const origRaf = globalThis.requestAnimationFrame;
+    globalThis.requestAnimationFrame = vi.fn((cb: FrameRequestCallback) => {
+      rafCb = cb;
+      return 0;
+    });
+
+    // Trigger the empty-checkbox RAF path: "- [ ] " with nothing after prefix
+    await act(async () => {
+      fireEvent.input(ta, { target: { value: "# RafNull\n\n- [ ] " } });
+    });
+    ta.selectionStart = ta.value.length;
+    ta.selectionEnd = ta.value.length;
+    await act(async () => {
+      fireEvent.keyDown(ta, { key: "Enter" });
+    });
+
+    globalThis.requestAnimationFrame = origRaf;
+
+    if (rafCb) {
+      // Unmount so editorRef.current becomes null, then invoke the captured RAF.
+      // The `if (editorRef.current)` guard must handle it gracefully (no crash).
+      cleanup();
+      expect(() => (rafCb as FrameRequestCallback)(0)).not.toThrow();
+    }
+  });
+});

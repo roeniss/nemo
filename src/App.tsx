@@ -1044,6 +1044,7 @@ export default function App() {
                   </li>
                 )}
               </ul>
+              <p className="shortcut-hint">Alt+J / Alt+K to navigate</p>
             </>
           ) : (
             <ul className="memo-list">

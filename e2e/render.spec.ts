@@ -41,7 +41,7 @@ test.describe("markdown rendering + sanitization", () => {
       .first()
       .evaluate((el) => (el as HTMLAnchorElement).getAttribute("href") ?? "")
       .catch(() => "");
-    expect(jsHref.startsWith("javascript:")).toBe(false);
+    expect(/^(javascript|data|vbscript):/i.test(jsHref)).toBe(false);
 
     // and nothing executed
     expect(await page.evaluate(() => (window as unknown as { __pwned?: boolean }).__pwned)).toBeUndefined();

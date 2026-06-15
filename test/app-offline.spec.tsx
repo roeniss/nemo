@@ -454,28 +454,19 @@ describe("recover", () => {
 // materializeTemps branches (~334-365)
 // ===========================================================================
 describe("materializeTemps", () => {
-  it("skips a blank temp and breaks when the server is still offline", async () => {
+  it("goes offline and breaks when a content temp's POST fails", async () => {
     authedBoot();
-    // pre-seed a blank temp (gets skipped) and a content temp (POST attempted → break)
-    localStorage.setItem(
-      TEMPS_KEY,
-      JSON.stringify([
-        { id: -101, title: "Untitled", updated_at: 2 },
-        { id: -102, title: "Has body", updated_at: 1 },
-      ])
-    );
-    kv.set(DRAFT + -101, "# "); // blank → skipped
-    kv.set(DRAFT + -102, "# Has body\n\nreal text"); // content → POST attempted
-    server.opts.postThrows = true; // POST fails → inner catch → break
+    // a content temp survives the boot cleanup; its POST is attempted → break
+    localStorage.setItem(TEMPS_KEY, JSON.stringify([{ id: -102, title: "Has body", updated_at: 1 }]));
+    kv.set(DRAFT + -102, "# Has body\n\nreal text");
+    server.opts.postThrows = true; // POST fails → inner catch → setOffline + break
 
     const { container } = render(<App />);
-    await waitFor(() => expect(container.querySelector(".app")).toBeTruthy());
-    // both temps survive (blank skipped, content one broke out before removal)
-    await waitFor(() => {
-      const temps = JSON.parse(localStorage.getItem(TEMPS_KEY) || "[]");
-      expect(temps.some((t: any) => t.id === -101)).toBe(true);
-      expect(temps.some((t: any) => t.id === -102)).toBe(true);
-    });
+    // the failed materialize surfaces offline, and the content temp survives
+    await waitFor(() => expect(container.querySelector(".status.offline")).toBeTruthy());
+    expect(
+      JSON.parse(localStorage.getItem(TEMPS_KEY) || "[]").some((t: any) => t.id === -102)
+    ).toBe(true);
   });
 
   it("POSTs+PUTs a content temp and removes it from qm-temps", async () => {
@@ -496,14 +487,13 @@ describe("materializeTemps", () => {
 });
 
 // ===========================================================================
-// newMemo offline catch (~317-330)
+// newMemo always creates a local temp (never a server POST) — issue #51
 // ===========================================================================
-describe("newMemo offline", () => {
-  it("creates a negative-id temp + DRAFT when POST rejects", async () => {
+describe("newMemo", () => {
+  it("creates a negative-id temp + DRAFT without any server POST", async () => {
     authedBoot();
-    server.opts.postThrows = true;
     const { container } = render(<App />);
-    await waitFor(() => expect(container.querySelector(".status.offline")).toBeTruthy());
+    await waitFor(() => expect(container.querySelector("textarea.editor")).toBeTruthy());
     await waitFor(() => {
       const temps = JSON.parse(localStorage.getItem(TEMPS_KEY) || "[]");
       expect(temps.length).toBeGreaterThan(0);
@@ -512,6 +502,12 @@ describe("newMemo offline", () => {
     // a DRAFT for that temp holds NEW_DOC
     const temps = JSON.parse(localStorage.getItem(TEMPS_KEY) || "[]");
     expect(kv.get(DRAFT + temps[0].id)).toBe("# ");
+    // an untouched new memo never hits the server
+    expect(
+      server.fetchImpl.mock.calls.some(
+        ([u, i]) => String(u).endsWith("/memos") && (i?.method || "").toUpperCase() === "POST"
+      )
+    ).toBe(false);
   });
 });
 
@@ -519,72 +515,20 @@ describe("newMemo offline", () => {
 // leaveCurrent branches (~234-257)
 // ===========================================================================
 describe("leaveCurrent", () => {
-  it("purges a fresh-empty real memo with DELETE ?purge=1 on leave", async () => {
-    authedBoot();
-    const other = server.seed({ title: "Keep", content: "# Keep\n\nkeep body" });
-    const { container } = render(<App />);
-    // boot creates a fresh empty real memo (the open one). Switching away purges it.
-    await waitFor(() => expect(container.querySelector("textarea.editor")).toBeTruthy());
-    await waitFor(() => expect(container.querySelectorAll(".memo-list li").length).toBeGreaterThanOrEqual(2));
-
-    // open the seeded memo → leaveCurrent purges the fresh-empty boot memo
-    const li = Array.from(container.querySelectorAll(".memo-list li")).find(
-      (el) => el.querySelector(".memo-title")?.textContent === "Keep"
-    )!;
-    await act(async () => {
-      fireEvent.click(li);
-    });
-    await waitFor(() => {
-      const purge = server.fetchImpl.mock.calls.find(
-        (c) => String(c[0]).includes("purge=1") && (c[1] as RequestInit)?.method === "DELETE"
-      );
-      expect(purge).toBeTruthy();
-    });
-    expect(other).toBeTruthy();
-  });
-
-  it("swallows the purge DELETE rejection while offline on leave", async () => {
-    authedBoot();
-    server.seed({ title: "Other", content: "# Other\n\nbody" });
-    const { container } = render(<App />);
-    await waitFor(() => expect(container.querySelector("textarea.editor")).toBeTruthy());
-    await waitFor(() => expect(container.querySelectorAll(".memo-list li").length).toBeGreaterThanOrEqual(2));
-
-    // make the purge DELETE reject → leaveCurrent's catch swallows it
-    const orig = server.fetchImpl;
-    globalThis.fetch = vi.fn(async (input: any, init: any) => {
-      const url = String(input);
-      if (url.includes("purge=1") && (init?.method || "GET") === "DELETE") throw new Error("offline");
-      return orig(input, init);
-    }) as unknown as typeof fetch;
-
-    const li = Array.from(container.querySelectorAll(".memo-list li")).find(
-      (el) => el.querySelector(".memo-title")?.textContent === "Other"
-    )!;
-    await act(async () => {
-      fireEvent.click(li);
-    });
-    // no crash; the seeded memo opened
-    await waitFor(() =>
-      expect((container.querySelector("textarea.editor") as HTMLTextAreaElement)?.value).toContain("body")
-    );
-  });
-
   it("drops a fresh-empty temp locally on leave (id < 0)", async () => {
     authedBoot();
-    server.opts.postThrows = true; // boot newMemo → fresh empty temp
     const seeded = server.seed({ title: "Real", content: "# Real\n\nreal body" });
     const { container } = render(<App />);
-    await waitFor(() => expect(container.querySelector(".status.offline")).toBeTruthy());
+    // boot creates a fresh-empty temp (the open one)
+    await waitFor(() => expect(container.querySelector("textarea.editor")).toBeTruthy());
     await waitFor(() => {
       const temps = JSON.parse(localStorage.getItem(TEMPS_KEY) || "[]");
       expect(temps.length).toBeGreaterThan(0);
     });
     const tempId = JSON.parse(localStorage.getItem(TEMPS_KEY) || "[]")[0].id as number;
 
-    // server reachable again so we can open the real memo; leaving the fresh-empty
-    // temp drops it locally (id < 0 branch)
-    server.opts.postThrows = false;
+    // open the real memo → leaving the fresh-empty temp drops it locally (id < 0),
+    // with no server call (it was never uploaded)
     await act(async () => {
       location.hash = "#" + seeded.id;
       window.dispatchEvent(new HashChangeEvent("hashchange"));
@@ -597,6 +541,7 @@ describe("leaveCurrent", () => {
       expect(temps.some((t: any) => t.id === tempId)).toBe(false);
     });
     expect(kv.get(DRAFT + tempId)).toBeNull();
+    expect(server.fetchImpl.mock.calls.some((c) => String(c[0]).includes("purge=1"))).toBe(false);
   });
 });
 
@@ -606,10 +551,11 @@ describe("leaveCurrent", () => {
 describe("deleteMemo", () => {
   it("drops a temp locally (id<0) and clears the editor when it's open", async () => {
     authedBoot();
-    server.opts.postThrows = true;
     const { container } = render(<App />);
-    await waitFor(() => expect(container.querySelector(".status.offline")).toBeTruthy());
     await waitFor(() => expect(container.querySelector(".memo-list li")).toBeTruthy());
+    await waitFor(() =>
+      expect(JSON.parse(localStorage.getItem(TEMPS_KEY) || "[]").length).toBeGreaterThan(0)
+    );
 
     // type content so a DRAFT exists for the temp, then delete it
     const ta = container.querySelector("textarea.editor") as HTMLTextAreaElement;
@@ -750,6 +696,7 @@ describe("boot offline", () => {
     authedBoot();
     localStorage.setItem(LIST_CACHE, JSON.stringify([{ id: 1007, title: "Cached", updated_at: 50 }]));
     localStorage.setItem(TEMPS_KEY, JSON.stringify([{ id: -7, title: "Temp", updated_at: 60 }]));
+    kv.set(DRAFT + -7, "# Temp\n\ntemp body"); // content draft → survives the boot cleanup
     kv.set(CONTENT_CACHE + 1007, "# Cached\n\ndeep linked body");
     server.opts.getThrows = true; // boot GET /memos rejects → catch branch
 

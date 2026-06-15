@@ -27,9 +27,9 @@ test.describe("memo editing", () => {
     // wait for status to settle to Saved
     await expect(page.locator(".status")).toHaveText("Saved");
     const hash = await page.evaluate(() => location.hash);
-    expect(hash).toMatch(/^#\d+$/);
+    expect(hash).toMatch(/^#-?\d+$/); // a local temp until it materializes; content is saved either way
 
-    // reload → content restored from the server for this memo
+    // reload → content restored (from the local draft for a temp, or the server)
     await page.reload();
     await expect(page).toHaveURL(new RegExp(`${hash}$`));
     await expect(editor).toHaveValue(`# ${title}\n\nbody text`);
@@ -50,6 +50,10 @@ test.describe("memo editing", () => {
     await page.locator(sel.editor).click();
     await page.keyboard.type(`${title}\n\nbody`);
     await expect(page.locator(".status")).toHaveText("Saved");
+    // materialize the new temp to a real server memo — deleting a temp would just
+    // drop it locally (no trash, no Undo), whereas a server memo soft-deletes
+    await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+    await expect(page).toHaveURL(/#\d+$/);
 
     const row = page.locator(`${sel.list}:has(.memo-title:text-is("${title}"))`);
     await expect(row).toBeVisible();

@@ -60,7 +60,12 @@ export default function App() {
   const [loading, setLoading] = useState(true);
   const [memos, setMemos] = useState<MemoMeta[]>([]);
   const [trash, setTrash] = useState<MemoMeta[]>([]);
-  const [view, setView] = useState<"memos" | "trash" | "settings">("memos");
+  const [view, setView] = useState<"memos" | "trash" | "settings">(() => {
+    const h = location.hash.replace(/^#/, "");
+    if (h === "settings") return "settings";
+    if (h === "trash") return "trash";
+    return "memos";
+  });
   const [viewing, setViewing] = useState<Memo | null>(null); // trashed memo open in read-only view
   const [query, setQuery] = useState("");
   const [keyword, setKeyword] = useState<string | null>(null); // selected filter badge
@@ -97,6 +102,7 @@ export default function App() {
     themePref === "system" ? (systemDark ? "dark" : "light") : themePref;
   const [saving, setSaving] = useState(false);
   const [offline, setOffline] = useState(false);
+  const [admin, setAdmin] = useState(false); // surfaces the Settings admin panel (issue #66)
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastSaveAt = useRef(0); // for the max-wait save guarantee
   const inFlight = useRef(false); // one server save at a time (avoids self-conflict)
@@ -147,6 +153,16 @@ export default function App() {
   /* v8 ignore next */
   const openMemoRef = useRef<(id: number) => void>(() => {});
 
+  // navigate to a named view, syncing both React state and the URL hash
+  function navigateTo(v: "memos" | "trash" | "settings") {
+    setView(v);
+    if (v === "memos") {
+      history.replaceState(null, "", location.pathname + location.search);
+    } else {
+      location.hash = v;
+    }
+  }
+
   // background auth check + list — UI is already on screen; this fills it in
   useEffect(() => {
     let temps: MemoMeta[] = [];
@@ -169,6 +185,14 @@ export default function App() {
         }
         localStorage.setItem("qm-authed", "1");
         setAuthed(true);
+        // surface whether this session is an admin so Settings can show the
+        // user-management panel; failures just leave it off.
+        api("/me")
+          .then((me) =>
+            me.ok ? (me.json() as Promise<{ uid?: number; username?: string; admin?: boolean }>) : null,
+          )
+          .then((d) => setAdmin(!!d?.admin))
+          .catch(() => {});
         const list = (await r.json()) as MemoMeta[];
         writeList(LIST_CACHE, list);
         const merged = [...temps, ...list].sort(byRecent);
@@ -176,9 +200,12 @@ export default function App() {
         setLoading(false);
         materializeTemps();
         // a URL hash points at a memo → open it (bookmark / reload / back-forward);
+        // a named hash (#settings, #trash) just keeps the already-initialised view;
         // a fresh visit with no hash defaults to a new document
+        const h = location.hash.replace(/^#/, "");
         const want = hashId();
         if (want != null && merged.some((m) => m.id === want)) openMemo(want);
+        else if (h === "settings" || h === "trash") { /* view already set by initialiser */ }
         else newMemo();
       })
       .catch(() => {
@@ -188,6 +215,7 @@ export default function App() {
         setOffline(true);
         setLoading(false);
         // open the hashed memo if we have its content locally, else a new document
+        const hOffline = location.hash.replace(/^#/, "");
         const want = hashId();
         if (
           want != null &&
@@ -197,6 +225,8 @@ export default function App() {
             kv.get(CONTENT_CACHE + want) != null)
         ) {
           openMemo(want);
+        } else if (hOffline === "settings" || hOffline === "trash") {
+          // named view — keep the already-initialised view, nothing to open
         } else {
           newMemo(); // creates a local temp while offline
         }
@@ -215,16 +245,23 @@ export default function App() {
       navStarted.current = true;
       return;
     }
+    const h = location.hash.replace(/^#/, "");
+    const isNamedView = h === "settings" || h === "trash";
     if (currentId == null) {
-      if (location.hash) history.replaceState(null, "", location.pathname + location.search);
+      // don't clear the hash when a named view (#settings / #trash) owns it
+      if (location.hash && !isNamedView) history.replaceState(null, "", location.pathname + location.search);
     } else if (hashId() !== currentId) {
       location.hash = String(currentId);
     }
   }, [currentId]);
 
-  // back/forward (or an edited URL) → open that memo
+  // back/forward (or an edited URL) → open that memo or switch to a named view
   useEffect(() => {
     function onHash() {
+      const h = location.hash.replace(/^#/, "");
+      if (h === "settings") { setView("settings"); setViewing(null); return; }
+      if (h === "trash") { setView("trash"); loadTrash(); return; }
+      if (!h) { setView("memos"); setViewing(null); return; }
       const id = hashId();
       if (id != null && id !== currentIdRef.current) openMemoRef.current(id);
     }
@@ -379,7 +416,7 @@ export default function App() {
   // is actually shown. Kept separate so boot doesn't force the view (which would
   // race with restoring the Trash/Settings tab on load).
   function newMemoFromUI() {
-    setView("memos");
+    navigateTo("memos");
     newMemo();
   }
 
@@ -1103,7 +1140,7 @@ export default function App() {
             <button
               className={view === "memos" ? "tab active" : "tab"}
               onClick={() => {
-                setView("memos");
+                navigateTo("memos");
                 setViewing(null);
               }}
             >
@@ -1112,7 +1149,7 @@ export default function App() {
             <button
               className={view === "trash" ? "tab active" : "tab"}
               onClick={() => {
-                setView("trash");
+                navigateTo("trash");
                 loadTrash();
               }}
             >
@@ -1218,7 +1255,7 @@ export default function App() {
               className={`ghost settings-toggle icon-btn${view === "settings" ? " active" : ""}`}
               aria-label="Settings"
               onClick={() => {
-                setView(view === "settings" ? "memos" : "settings");
+                navigateTo(view === "settings" ? "memos" : "settings");
                 setViewing(null);
               }}
             >
@@ -1382,7 +1419,7 @@ export default function App() {
         )}
 
         {view === "settings" ? (
-          <Settings flash={flash} onLogout={logout} />
+          <Settings flash={flash} onLogout={logout} admin={admin} />
         ) : viewing ? (
           <div className="pane">
             <textarea

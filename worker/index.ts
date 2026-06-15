@@ -458,6 +458,59 @@ app.get("/api/me", (c) => {
   return c.json({ ok: true, uid, username, admin });
 });
 
+// --- admin: user management (issue #66, multi-tenancy) -------------------
+// Gated to admins: the JWT must carry admin=true (set by the multi-tenant
+// login). The middleware is async to keep the return type a plain
+// Promise<Response> and avoid Hono's overload-resolution complaints.
+app.use("/api/admin/*", async (c, next) => {
+  const { admin } = getUser(c);
+  if (!admin) return c.json({ error: "forbidden" }, 403);
+  return next();
+});
+
+// list all users
+app.get("/api/admin/users", async (c) => {
+  const { results } = await c.env.DB.prepare(
+    "SELECT id, username, is_admin, created_at, last_login_at FROM users ORDER BY created_at ASC"
+  ).all();
+  return c.json(results);
+});
+
+// create a (non-admin) user
+app.post("/api/admin/users", async (c) => {
+  const { username, password } = await c.req.json();
+  if (!username || !password) return c.json({ error: "username and password required" }, 400);
+  const hash = await hashPassword(password);
+  const now = Date.now();
+  try {
+    const row = await c.env.DB.prepare(
+      "INSERT INTO users (username, password_hash, is_admin, created_at) VALUES (?, ?, 0, ?) RETURNING id, username, is_admin, created_at"
+    ).bind(username, hash, now).first();
+    return c.json(row, 201);
+  } catch {
+    return c.json({ error: "username already exists" }, 409);
+  }
+});
+
+// hard-delete a non-admin user (admins and self are protected)
+app.delete("/api/admin/users/:id", async (c) => {
+  const id = Number(c.req.param("id"));
+  const { uid } = getUser(c);
+  if (id === uid) return c.json({ error: "cannot delete yourself" }, 400);
+  await c.env.DB.prepare("DELETE FROM users WHERE id = ? AND is_admin = 0").bind(id).run();
+  return c.json({ ok: true });
+});
+
+// reset a user's password
+app.patch("/api/admin/users/:id/password", async (c) => {
+  const id = Number(c.req.param("id"));
+  const { password } = await c.req.json();
+  if (!password) return c.json({ error: "password required" }, 400);
+  const hash = await hashPassword(password);
+  await c.env.DB.prepare("UPDATE users SET password_hash = ? WHERE id = ?").bind(hash, id).run();
+  return c.json({ ok: true });
+});
+
 // --- api token management (web app Settings page, JWT-gated) -------------
 // list active tokens (never the hash or plaintext — those are unrecoverable)
 app.get("/api/tokens", async (c) => {

@@ -626,6 +626,83 @@ describe("trash", () => {
 });
 
 // ===========================================================================
+// URL HASH ROUTING  (navigateTo + boot restore + hashchange handler)
+// ===========================================================================
+describe("url hash routing", () => {
+  it("navigateTo writes the hash for named views and clears it for memos", async () => {
+    authedBoot();
+    const { container } = render(<App />);
+    await waitFor(() => expect(container.querySelector(".side-tabs")).toBeTruthy());
+
+    // Settings view → #settings
+    fireEvent.click(container.querySelector(".settings-toggle")!);
+    await waitFor(() => expect(container.querySelector(".settings")).toBeTruthy());
+    expect(location.hash).toBe("#settings");
+
+    // Trash view → #trash
+    fireEvent.click(container.querySelectorAll(".side-tabs button")[1]);
+    await waitFor(() => expect(container.querySelectorAll(".side-tabs button")[1].className).toContain("active"));
+    expect(location.hash).toBe("#trash");
+
+    // Memos view → hash cleared
+    fireEvent.click(container.querySelectorAll(".side-tabs button")[0]);
+    await waitFor(() => expect(container.querySelector(".search")).toBeTruthy());
+    expect(location.hash).toBe("");
+  });
+
+  it("boots straight into settings when the hash is #settings", async () => {
+    authedBoot();
+    location.hash = "#settings";
+    const { container } = render(<App />);
+    await waitFor(() => expect(container.querySelector(".settings")).toBeTruthy());
+    expect(container.querySelector(".settings-toggle")?.className).toContain("active");
+  });
+
+  it("boots straight into trash when the hash is #trash", async () => {
+    authedBoot();
+    server.trash.push(...server.memos.splice(0, server.memos.length));
+    const t = server.seed({ title: "BootTrash", content: "# B" });
+    server.trash.push(...server.memos.splice(server.memos.indexOf(t), 1));
+    location.hash = "#trash";
+    const { container } = render(<App />);
+    await waitFor(() => expect(container.querySelectorAll(".side-tabs button")[1].className).toContain("active"));
+    await waitFor(() => expect(container.querySelector(".memo-list .restore")).toBeTruthy());
+  });
+
+  it("reacts to back/forward hashchange across settings, trash, memos and a memo", async () => {
+    authedBoot();
+    const row = server.seed({ title: "Hashed", content: "# Hashed\n\nbody" });
+    const { container } = render(<App />);
+    await waitFor(() => expect(container.querySelector(".side-tabs")).toBeTruthy());
+
+    const fireHash = async (h: string) => {
+      location.hash = h;
+      await act(async () => {
+        window.dispatchEvent(new HashChangeEvent("hashchange"));
+      });
+    };
+
+    // → settings
+    await fireHash("#settings");
+    await waitFor(() => expect(container.querySelector(".settings")).toBeTruthy());
+
+    // → trash
+    await fireHash("#trash");
+    await waitFor(() => expect(container.querySelectorAll(".side-tabs button")[1].className).toContain("active"));
+
+    // → a specific memo id opens that memo
+    await fireHash("#" + row.id);
+    await waitFor(() =>
+      expect((container.querySelector("textarea.editor") as HTMLTextAreaElement)?.value).toContain("Hashed")
+    );
+
+    // → empty hash returns to the memos view
+    await fireHash("");
+    await waitFor(() => expect(container.querySelector(".search")).toBeTruthy());
+  });
+});
+
+// ===========================================================================
 // DELETE + UNDO
 // ===========================================================================
 describe("delete and undo", () => {
@@ -3167,6 +3244,68 @@ describe("checkbox rAF cursor positioning", () => {
     await waitFor(() => expect(ta.value).toBe("- [ ] item one\n- [ ] "));
     // Cursor should be at end of inserted new checkbox
     expect(ta.selectionStart).toBe("- [ ] item one\n- [ ] ".length);
+  });
+});
+
+describe("checkbox toggle via preview click (real handler)", () => {
+  async function openEditorWithContent(content: string) {
+    authedBoot();
+    const row = server.seed({ content, title: "test" });
+    location.hash = "#" + row.id;
+    const { container } = render(<App />);
+    await waitFor(() =>
+      expect((container.querySelector("textarea.editor") as HTMLTextAreaElement)?.value).toBe(content)
+    );
+    const ta = container.querySelector("textarea.editor") as HTMLTextAreaElement;
+    return { container, ta, row };
+  }
+
+  async function findCheckboxes(container: HTMLElement) {
+    let boxes: HTMLInputElement[] = [];
+    await waitFor(() => {
+      boxes = Array.from(
+        container.querySelectorAll('.preview input[type="checkbox"]')
+      ) as HTMLInputElement[];
+      expect(boxes.length).toBeGreaterThan(0);
+    });
+    return boxes;
+  }
+
+  // The app handles preview checkboxes via a delegated native listener on the
+  // preview container. marked renders task-list checkboxes as `disabled`, and a
+  // disabled control won't dispatch a click — so clear it first, then dispatch a
+  // bubbling click to drive the real handler.
+  function bubblingClick(el: Element) {
+    (el as HTMLInputElement).disabled = false;
+    el.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+  }
+
+  it("clicking the first preview checkbox checks it in the editor source", async () => {
+    const { container, ta } = await openEditorWithContent("- [ ] one\n- [ ] two");
+    const boxes = await findCheckboxes(container);
+    await act(async () => {
+      bubblingClick(boxes[0]);
+    });
+    await waitFor(() => expect(ta.value).toBe("- [x] one\n- [ ] two"));
+  });
+
+  it("clicking the second preview checkbox toggles only that line", async () => {
+    const { container, ta } = await openEditorWithContent("- [ ] one\n- [x] two");
+    const boxes = await findCheckboxes(container);
+    await act(async () => {
+      bubblingClick(boxes[1]);
+    });
+    await waitFor(() => expect(ta.value).toBe("- [ ] one\n- [ ] two"));
+  });
+
+  it("ignores clicks on non-checkbox elements in the preview", async () => {
+    const { container, ta } = await openEditorWithContent("- [ ] one\n\nplain text");
+    await findCheckboxes(container);
+    const para = container.querySelector(".preview p") as HTMLElement;
+    await act(async () => {
+      bubblingClick(para);
+    });
+    expect(ta.value).toBe("- [ ] one\n\nplain text");
   });
 });
 

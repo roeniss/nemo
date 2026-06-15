@@ -940,15 +940,47 @@ export default function App() {
     const lineEnd = val.indexOf("\n", pos);
     const line = val.slice(lineStart, lineEnd === -1 ? undefined : lineEnd);
     const checkboxMatch = line.match(/^(\s*)-\s+\[[ xX]\]\s*/i);
-    if (!checkboxMatch) return;
+    if (checkboxMatch) {
+      e.preventDefault();
+      const prefix = checkboxMatch[0];
+      const indent = checkboxMatch[1];
+      const afterPrefix = line.slice(prefix.length);
+      if (afterPrefix.length === 0) {
+        // Empty checkbox item — collapse to plain newline (remove the checkbox prefix)
+        // Remove the entire current line content, leaving only the preceding newline,
+        // then insert a plain newline for the cursor position
+        const removeLineContent = val.slice(0, lineStart) + "\n" + val.slice(lineEnd === -1 ? val.length : lineEnd);
+        onEdit(removeLineContent);
+        requestAnimationFrame(() => {
+          if (editorRef.current) {
+            const newPos = lineStart + 1;
+            editorRef.current.setSelectionRange(newPos, newPos);
+          }
+        });
+      } else {
+        // Continue with new checkbox
+        const insertion = "\n" + indent + "- [ ] ";
+        const newContent = val.slice(0, pos) + insertion + val.slice(pos);
+        onEdit(newContent);
+        requestAnimationFrame(() => {
+          if (editorRef.current) {
+            const newPos = pos + insertion.length;
+            editorRef.current.setSelectionRange(newPos, newPos);
+          }
+        });
+      }
+      return;
+    }
+
+    // Plain list item (- text), but not checkbox
+    const plainListMatch = line.match(/^(\s*)-\s+/);
+    if (!plainListMatch) return;
     e.preventDefault();
-    const prefix = checkboxMatch[0];
-    const indent = checkboxMatch[1];
-    const afterPrefix = line.slice(prefix.length);
-    if (afterPrefix.length === 0) {
-      // Empty checkbox item — collapse to plain newline (remove the checkbox prefix)
-      // Remove the entire current line content, leaving only the preceding newline,
-      // then insert a plain newline for the cursor position
+    const plainPrefix = plainListMatch[0];
+    const plainIndent = plainListMatch[1];
+    const afterPlainPrefix = line.slice(plainPrefix.length);
+    if (afterPlainPrefix.length === 0) {
+      // Empty plain list item — collapse to plain newline
       const removeLineContent = val.slice(0, lineStart) + "\n" + val.slice(lineEnd === -1 ? val.length : lineEnd);
       onEdit(removeLineContent);
       requestAnimationFrame(() => {
@@ -958,8 +990,8 @@ export default function App() {
         }
       });
     } else {
-      // Continue with new checkbox
-      const insertion = "\n" + indent + "- [ ] ";
+      // Continue with new plain list item
+      const insertion = "\n" + plainIndent + "- ";
       const newContent = val.slice(0, pos) + insertion + val.slice(pos);
       onEdit(newContent);
       requestAnimationFrame(() => {

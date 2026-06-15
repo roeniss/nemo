@@ -3107,3 +3107,62 @@ describe("settings view", () => {
   });
 });
 
+describe("plain list auto-continue on Enter", () => {
+  async function openEditorWithContent(content: string) {
+    authedBoot();
+    const row = server.seed({ content, title: "test" });
+    location.hash = "#" + row.id;
+    const { container } = render(<App />);
+    await waitFor(() =>
+      expect((container.querySelector("textarea.editor") as HTMLTextAreaElement)?.value).toBe(content)
+    );
+    const ta = container.querySelector("textarea.editor") as HTMLTextAreaElement;
+    return { container, ta, row };
+  }
+
+  it("inserts a new plain list item on Enter at end of list line with content", async () => {
+    const { ta } = await openEditorWithContent("- item one");
+    await act(async () => {
+      ta.selectionStart = ta.selectionEnd = ta.value.length;
+      fireEvent.keyDown(ta, { key: "Enter" });
+    });
+    await waitFor(() => expect(ta.value).toBe("- item one\n- "));
+  });
+
+  it("collapses empty plain list line to plain newline on Enter", async () => {
+    const { ta } = await openEditorWithContent("- item one\n- ");
+    await act(async () => {
+      ta.selectionStart = ta.selectionEnd = ta.value.length;
+      fireEvent.keyDown(ta, { key: "Enter" });
+    });
+    await waitFor(() => expect(ta.value).toBe("- item one\n\n"));
+  });
+
+  it("does not trigger plain list on Enter with modifier keys", async () => {
+    const { ta } = await openEditorWithContent("- item one");
+    const original = ta.value;
+    await act(async () => {
+      ta.selectionStart = ta.selectionEnd = ta.value.length;
+      fireEvent.keyDown(ta, { key: "Enter", ctrlKey: true });
+    });
+    expect(ta.value).toBe(original);
+  });
+
+  it("continues with same indentation for indented plain list item", async () => {
+    const { ta } = await openEditorWithContent("  - indented item");
+    await act(async () => {
+      ta.selectionStart = ta.selectionEnd = ta.value.length;
+      fireEvent.keyDown(ta, { key: "Enter" });
+    });
+    await waitFor(() => expect(ta.value).toBe("  - indented item\n  - "));
+  });
+
+  it("checkbox takes priority over plain list for checkbox lines", async () => {
+    const { ta } = await openEditorWithContent("- [ ] checkbox item");
+    await act(async () => {
+      ta.selectionStart = ta.selectionEnd = ta.value.length;
+      fireEvent.keyDown(ta, { key: "Enter" });
+    });
+    await waitFor(() => expect(ta.value).toBe("- [ ] checkbox item\n- [ ] "));
+  });
+});

@@ -127,7 +127,7 @@ export function Settings({ flash }: { flash: (msg: string) => void }) {
         )}
       </ul>
 
-      <h2>Passkeys</h2>
+      <h2 className="section-heading">Passkeys</h2>
       <p className="muted">Register a passkey (fingerprint, Face ID, or hardware key) as an additional login option.</p>
       <button onClick={registerPasskey}>Passkey 등록</button>
       {passkeyMsg && <p className="muted">{passkeyMsg}</p>}

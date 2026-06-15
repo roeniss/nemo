@@ -338,6 +338,9 @@ input {
 .settings h2 {
   margin: 0 0 6px;
 }
+.settings h2.section-heading {
+  margin-top: 2rem;
+}
 .settings .muted {
   color: var(--fg-muted);
   font-size: 13px;

@@ -7,6 +7,7 @@ export const AAGUIDS: Record<string, string> = {
   "dd4ec289-e01d-41c9-bb89-70fa845d4bf2": "iCloud Keychain (macOS)",
   // Google
   "ea9b8d66-4d01-1d21-3c4c-7960b7bb0b11": "Google Password Manager",
+  "ea9b8d66-4d01-1d21-3ce4-b6b48cb575d4": "Google Password Manager",
   "adce0002-35bc-c60a-648b-0b25f1f05503": "Chrome on Mac",
   // Microsoft / Windows Hello
   "08987058-cadc-4b81-b6e1-30de50dcbe96": "Windows Hello",

@@ -563,8 +563,16 @@ describe("toolbar and sidebar", () => {
   it("logs out", async () => {
     authedBoot();
     const { container } = render(<App />);
-    await waitFor(() => expect(container.querySelector(".side-head .ghost")).toBeTruthy());
-    fireEvent.click(container.querySelector(".side-head .ghost")!);
+    // open Settings via the gear icon in the topbar
+    await waitFor(() => expect(container.querySelector(".settings-toggle")).toBeTruthy());
+    fireEvent.click(container.querySelector(".settings-toggle")!);
+    // wait for the Settings page (which renders the logout button)
+    await waitFor(() => expect(container.querySelector(".settings")).toBeTruthy());
+    // click the logout button inside Settings
+    const logoutBtn = Array.from(container.querySelectorAll(".settings button")).find(
+      (b) => b.textContent === "로그아웃"
+    ) as HTMLButtonElement;
+    fireEvent.click(logoutBtn);
     await waitFor(() => expect(container.querySelector(".login")).toBeTruthy());
     expect(localStorage.getItem("qm-authed")).toBeNull();
   });
@@ -837,9 +845,15 @@ describe("beforeunload", () => {
   it("does nothing on unload when no memo is open (id == null)", async () => {
     authedBoot();
     const { container } = render(<App />);
-    await waitFor(() => expect(container.querySelector(".side-head .ghost")).toBeTruthy());
+    // open Settings via the gear icon, then logout to clear currentId
+    await waitFor(() => expect(container.querySelector(".settings-toggle")).toBeTruthy());
+    fireEvent.click(container.querySelector(".settings-toggle")!);
+    await waitFor(() => expect(container.querySelector(".settings")).toBeTruthy());
     // logout clears the open memo → currentId becomes null
-    fireEvent.click(container.querySelector(".side-head .ghost")!);
+    const logoutBtn = Array.from(container.querySelectorAll(".settings button")).find(
+      (b) => b.textContent === "로그아웃"
+    ) as HTMLButtonElement;
+    fireEvent.click(logoutBtn);
     await waitFor(() => expect(container.querySelector(".login")).toBeTruthy());
     const before = server.fetchImpl.mock.calls.length;
     await act(async () => {
@@ -3028,15 +3042,13 @@ describe("preview caret centering", () => {
 });
 
 describe("settings view", () => {
-  it("opens the Settings page from the sidebar and returns to the memos view", async () => {
+  it("opens the Settings page from the topbar gear icon and returns to the memos view", async () => {
     authedBoot();
     const { container } = render(<App />);
     await waitFor(() => expect(container.querySelector(".side-tabs")).toBeTruthy());
 
-    // the sidebar header button (replacing the old "+ New") opens Settings
-    const settingsBtn = Array.from(container.querySelectorAll(".side-head button")).find((b) =>
-      b.textContent?.includes("Settings")
-    ) as HTMLButtonElement;
+    // the gear icon button in the topbar opens Settings
+    const settingsBtn = container.querySelector(".settings-toggle") as HTMLButtonElement;
     await act(async () => {
       fireEvent.click(settingsBtn);
     });

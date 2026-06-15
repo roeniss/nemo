@@ -46,7 +46,8 @@ test.describe("auth", () => {
     await page.fill('input[placeholder="password"]', PASS);
     await page.click('button[type="submit"]');
     await expect(page.locator(sel.editor)).toBeVisible();
-    await page.click("text=Logout");
+    await page.click('button[aria-label="Settings"]');
+    await page.click("text=로그아웃");
     await expect(page.locator("form.login")).toBeVisible();
   });
 });

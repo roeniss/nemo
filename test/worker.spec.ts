@@ -381,6 +381,13 @@ describe("history (session snapshots)", () => {
     expect(r.status).toBe(404);
     expect(await r.json()).toEqual({ error: "not found" });
   });
+
+  it("404s a version fetch for a non-existent memo", async () => {
+    const h = await authedHeaders();
+    const r = await req("/api/memos/99999/versions/1", { headers: h });
+    expect(r.status).toBe(404);
+    expect(await r.json()).toEqual({ error: "not found" });
+  });
 });
 
 describe("turnstile enforcement (TURNSTILE_SECRET set)", () => {

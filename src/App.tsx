@@ -917,7 +917,7 @@ export default function App() {
       if (target.tagName !== "INPUT" || (target as HTMLInputElement).type !== "checkbox") return;
       if (viewingRef.current || currentIdRef.current == null) return;
       e.preventDefault();
-      const allBoxes = Array.from(pv.querySelectorAll('input[type="checkbox"]'));
+      const allBoxes = Array.from(pv!.querySelectorAll('input[type="checkbox"]'));
       const idx = allBoxes.indexOf(target);
       if (idx === -1) return;
       const toggled = toggleNthCheckbox(contentRef.current, idx);

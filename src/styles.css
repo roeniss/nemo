@@ -261,6 +261,13 @@ input {
 .topbar .new-memo {
   font-weight: 600;
 }
+.icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 4px 6px;
+  min-width: 0;
+}
 .github-link {
   display: inline-flex;
   align-items: center;

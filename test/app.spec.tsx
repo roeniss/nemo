@@ -1171,8 +1171,8 @@ describe("theme preference init", () => {
       await waitFor(() => expect(container.querySelector(".app")).toBeTruthy());
       await waitFor(() => expect(document.documentElement.dataset.theme).toBe("light"));
       expect(meta.getAttribute("content")).toBe("#ffffff");
-      // the toggle reflects the light preference
-      expect(container.querySelector(".theme-toggle")?.textContent).toBe("☀️");
+      // the toggle reflects the light preference (SVG icon, no text content)
+      expect(container.querySelector(".theme-toggle svg")).toBeTruthy();
     } finally {
       meta.remove();
     }
@@ -1191,7 +1191,7 @@ describe("theme preference init", () => {
       await waitFor(() => expect(container.querySelector(".app")).toBeTruthy());
       await waitFor(() => expect(document.documentElement.dataset.theme).toBe("dark"));
       expect(meta.getAttribute("content")).toBe("#1a1a1a");
-      expect(container.querySelector(".theme-toggle")?.textContent).toBe("🌙");
+      expect(container.querySelector(".theme-toggle svg")).toBeTruthy();
     } finally {
       meta.remove();
     }

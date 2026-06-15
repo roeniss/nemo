@@ -1094,8 +1094,6 @@ export default function App() {
     <div className="app">
       {sidebar && (
         <aside className="sidebar">
-          <div className="side-head">
-          </div>
           <div className="side-tabs">
             <button
               className={view === "memos" ? "tab active" : "tab"}

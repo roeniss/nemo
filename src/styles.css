@@ -128,15 +128,6 @@ input {
   flex-direction: column;
   overflow: hidden;
 }
-.side-head {
-  display: flex;
-  gap: 6px;
-  padding: 10px;
-  border-bottom: 1px solid var(--border);
-}
-.side-head button {
-  flex: 1;
-}
 .side-tabs {
   display: flex;
   border-bottom: 1px solid var(--border);

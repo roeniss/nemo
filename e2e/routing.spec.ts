@@ -1,6 +1,47 @@
 import { test, expect } from "./fixtures";
 import { sel, seedMemo, purge, uniq } from "./helpers";
 
+test.describe("named-view URL routing (settings / trash)", () => {
+  test("navigating to Settings reflects #settings in the URL", async ({ page }) => {
+    await page.goto("/");
+    await page.click('button:has-text("⚙ Settings")');
+    await expect(page).toHaveURL(/#settings$/);
+  });
+
+  test("reloading /#settings shows Settings view", async ({ page }) => {
+    await page.goto("/#settings");
+    // Settings panel should be visible, not the memo editor
+    await expect(page.locator(sel.editor)).not.toBeVisible();
+    await expect(page).toHaveURL(/#settings$/);
+  });
+
+  test("navigating to Trash reflects #trash in the URL", async ({ page }) => {
+    await page.goto("/");
+    await page.click('.side-tabs .tab:has-text("Trash")');
+    await expect(page).toHaveURL(/#trash$/);
+  });
+
+  test("reloading /#trash shows Trash view", async ({ page }) => {
+    await page.goto("/#trash");
+    // Trash list should be visible (empty is fine)
+    await expect(page.locator('.memo-list li.empty:has-text("Trash is empty"), .memo-list li')).toBeVisible();
+    await expect(page).toHaveURL(/#trash$/);
+  });
+
+  test("switching from Settings to Memos clears the hash", async ({ page }) => {
+    await page.goto("/#settings");
+    await page.click('.side-tabs .tab:has-text("Memos")');
+    await expect(page).not.toHaveURL(/#/);
+  });
+
+  test("clicking new memo from Settings clears the hash and shows editor", async ({ page }) => {
+    await page.goto("/#settings");
+    await page.click(sel.newBtn);
+    await expect(page.locator(sel.editor)).toBeVisible();
+    await expect(page).toHaveURL(/#-?\d+$/);
+  });
+});
+
 test.describe("per-memo URL routing", () => {
   test("a fresh visit defaults to a new blank document", async ({ page }) => {
     await page.goto("/");

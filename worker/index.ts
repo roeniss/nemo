@@ -118,6 +118,18 @@ export async function verifyPassword(password: string, stored: string): Promise<
 
 const app = new Hono<{ Bindings: Bindings }>();
 
+// --- multi-tenancy helpers -----------------------------------------------
+// getUser pulls uid and admin flag from the JWT payload (set at login).
+// uid is the numeric users.id; admin is a boolean.
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function getUser(c: any): { uid: number; admin: boolean } {
+  const payload: Record<string, unknown> = c.get("jwtPayload") ?? {};
+  return {
+    uid: Number(payload.uid ?? 0),
+    admin: Boolean(payload.admin),
+  };
+}
+
 // --- auth ---------------------------------------------------------------
 async function verifyTurnstile(token: string, secret: string, ip: string | null): Promise<boolean> {
   const form = new FormData();
@@ -626,6 +638,57 @@ app.delete("/api/memos/:id", async (c) => {
       .bind(Date.now(), id)
       .run();
   }
+  return c.json({ ok: true });
+});
+
+// --- admin endpoints (/api/admin/*) --------------------------------------
+// Admin middleware — reuse after jwt middleware
+app.use('/api/admin/*', (c, next) => {
+  const { admin } = getUser(c);
+  if (!admin) return c.json({ error: 'forbidden' }, 403);
+  return next();
+});
+
+// GET /api/admin/users — list all users
+app.get('/api/admin/users', async (c) => {
+  const { results } = await c.env.DB.prepare(
+    'SELECT id, username, is_admin, created_at, last_login_at FROM users ORDER BY created_at ASC'
+  ).all();
+  return c.json(results);
+});
+
+// POST /api/admin/users — create user
+app.post('/api/admin/users', async (c) => {
+  const { username, password } = await c.req.json();
+  if (!username || !password) return c.json({ error: 'username and password required' }, 400);
+  const hash = await hashPassword(password);
+  const now = Date.now();
+  try {
+    const row = await c.env.DB.prepare(
+      'INSERT INTO users (username, password_hash, is_admin, created_at) VALUES (?, ?, 0, ?) RETURNING id, username, is_admin, created_at'
+    ).bind(username, hash, now).first();
+    return c.json(row, 201);
+  } catch {
+    return c.json({ error: 'username already exists' }, 409);
+  }
+});
+
+// DELETE /api/admin/users/:id — hard delete non-admin users
+app.delete('/api/admin/users/:id', async (c) => {
+  const id = Number(c.req.param('id'));
+  const { uid } = getUser(c);
+  if (id === uid) return c.json({ error: 'cannot delete yourself' }, 400);
+  await c.env.DB.prepare('DELETE FROM users WHERE id = ? AND is_admin = 0').bind(id).run();
+  return c.json({ ok: true });
+});
+
+// PATCH /api/admin/users/:id/password — reset password
+app.patch('/api/admin/users/:id/password', async (c) => {
+  const id = Number(c.req.param('id'));
+  const { password } = await c.req.json();
+  if (!password) return c.json({ error: 'password required' }, 400);
+  const hash = await hashPassword(password);
+  await c.env.DB.prepare('UPDATE users SET password_hash = ? WHERE id = ?').bind(hash, id).run();
   return c.json({ ok: true });
 });
 

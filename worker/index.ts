@@ -422,6 +422,28 @@ app.use("/api/*", (c, next) => {
 
 app.get("/api/me", (c) => c.json({ ok: true }));
 
+// --- passkey credential management (JWT-gated) ---------------------------
+// GET /api/passkey/credentials — list registered passkeys
+app.get("/api/passkey/credentials", async (c) => {
+  const { results } = await c.env.DB.prepare(
+    "SELECT id, credential_id, transports, created_at FROM webauthn_credentials ORDER BY created_at DESC"
+  ).all<{ id: number; credential_id: string; transports: string | null; created_at: number }>();
+  return c.json(results.map((r) => ({
+    id: r.id,
+    credential_id: r.credential_id,
+    transports: r.transports ? JSON.parse(r.transports) : [],
+    created_at: r.created_at,
+  })));
+});
+
+// DELETE /api/passkey/credentials/:id — delete a passkey by id
+app.delete("/api/passkey/credentials/:id", async (c) => {
+  await c.env.DB.prepare("DELETE FROM webauthn_credentials WHERE id = ?")
+    .bind(c.req.param("id"))
+    .run();
+  return c.json({ ok: true });
+});
+
 // --- api token management (web app Settings page, JWT-gated) -------------
 // list active tokens (never the hash or plaintext — those are unrecoverable)
 app.get("/api/tokens", async (c) => {

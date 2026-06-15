@@ -93,6 +93,74 @@ vi.mock("@simplewebauthn/server", async (importOriginal) => {
   };
 });
 
+describe("GET /api/passkey/credentials (JWT-protected)", () => {
+  it("returns empty list when no credentials registered", async () => {
+    const h = await authedHeaders();
+    const r = await req("/api/passkey/credentials", { method: "GET", headers: h });
+    expect(r.status).toBe(200);
+    expect(await r.json()).toEqual([]);
+  });
+
+  it("returns list of registered credentials", async () => {
+    const now = Date.now();
+    db.exec(
+      `INSERT INTO webauthn_credentials (credential_id, public_key, counter, transports, created_at)
+       VALUES ('cred-abc', 'pubkey', 0, '["internal"]', ${now})`
+    );
+    const h = await authedHeaders();
+    const r = await req("/api/passkey/credentials", { method: "GET", headers: h });
+    expect(r.status).toBe(200);
+    const body = await r.json() as any[];
+    expect(body).toHaveLength(1);
+    expect(body[0].credential_id).toBe("cred-abc");
+    expect(body[0].transports).toEqual(["internal"]);
+    expect(body[0].created_at).toBe(now);
+  });
+
+  it("returns transports as empty array when null", async () => {
+    db.exec(
+      `INSERT INTO webauthn_credentials (credential_id, public_key, counter, transports, created_at)
+       VALUES ('cred-notransport', 'pubkey', 0, NULL, ${Date.now()})`
+    );
+    const h = await authedHeaders();
+    const r = await req("/api/passkey/credentials", { method: "GET", headers: h });
+    expect(r.status).toBe(200);
+    const body = await r.json() as any[];
+    expect(body[0].transports).toEqual([]);
+  });
+
+  it("returns 401 without JWT", async () => {
+    const r = await req("/api/passkey/credentials", { method: "GET" });
+    expect(r.status).toBe(401);
+  });
+});
+
+describe("DELETE /api/passkey/credentials/:id (JWT-protected)", () => {
+  it("deletes a credential by id", async () => {
+    db.exec(
+      `INSERT INTO webauthn_credentials (credential_id, public_key, counter, transports, created_at)
+       VALUES ('cred-to-delete', 'pubkey', 0, NULL, ${Date.now()})`
+    );
+    const idRow = await db.prepare("SELECT id FROM webauthn_credentials WHERE credential_id = ?")
+      .bind("cred-to-delete")
+      .first<{ id: number }>();
+    const h = await authedHeaders();
+    const r = await req(`/api/passkey/credentials/${idRow!.id}`, { method: "DELETE", headers: h });
+    expect(r.status).toBe(200);
+    expect((await r.json() as any).ok).toBe(true);
+
+    const gone = await db.prepare("SELECT id FROM webauthn_credentials WHERE credential_id = ?")
+      .bind("cred-to-delete")
+      .first();
+    expect(gone).toBeNull();
+  });
+
+  it("returns 401 without JWT", async () => {
+    const r = await req("/api/passkey/credentials/1", { method: "DELETE" });
+    expect(r.status).toBe(401);
+  });
+});
+
 describe("POST /api/passkey/auth/options", () => {
   it("returns authentication options (no auth required)", async () => {
     const r = await req("/api/passkey/auth/options", {
@@ -287,5 +355,75 @@ describe("POST /api/passkey/register/verify (JWT-protected)", () => {
       body: JSON.stringify({ response: {}, challenge: "unverified-challenge" }),
     });
     expect(r.status).toBe(400);
+  });
+});
+
+// ===========================================================================
+// BRANCH COVERAGE — PR #65 gaps
+// ===========================================================================
+
+describe("verifyPassword catch branch", () => {
+  it("returns false when pbkdf2 throws (malformed hash triggers crypto error)", async () => {
+    // A stored hash with a valid prefix but an iteration count so extreme
+    // that the Workers crypto runtime rejects it — exercises the catch { return false } arm.
+    // We achieve this by passing a value that is not a valid PBKDF2 stored hash
+    // so verifyPassword returns false via the catch guard.
+    const r = await req("/api/login", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ username: "tester", password: "wrongpass" }),
+    });
+    // The env AUTH_PASS is a real PBKDF2 hash; a wrong password means timingSafeEqual
+    // returns false (no throw). To hit the catch we need a malformed stored hash.
+    // Swap env.AUTH_PASS to a malformed value.
+    const saved = env.AUTH_PASS;
+    env.AUTH_PASS = "pbkdf2:99999999999:invalidbase64!!!:invalidsalt===";
+    const r2 = await req("/api/login", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ username: "tester", password: "pw" }),
+    });
+    env.AUTH_PASS = saved;
+    // malformed hash → catch → false → 401
+    expect(r2.status).toBe(401);
+    expect(r.status).toBe(401);
+  });
+});
+
+describe("POST /api/passkey/auth/verify catch branch", () => {
+  it("returns 401 when verifyAuthenticationResponse throws", async () => {
+    const { verifyAuthenticationResponse } = await import("@simplewebauthn/server");
+    vi.mocked(verifyAuthenticationResponse).mockRejectedValueOnce(new Error("crypto error"));
+
+    db.exec(
+      `INSERT INTO webauthn_challenges (challenge, created_at) VALUES ('throw-challenge', ${Date.now()})`
+    );
+    db.exec(
+      `INSERT INTO webauthn_credentials (credential_id, public_key, counter, transports, created_at)
+       VALUES ('cred-throw', 'AQID', 0, '["internal"]', ${Date.now()})`
+    );
+    const r = await req("/api/passkey/auth/verify", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ response: { id: "cred-throw" }, challenge: "throw-challenge" }),
+    });
+    expect(r.status).toBe(401);
+    expect((await r.json() as any).error).toMatch(/verification failed/);
+  });
+});
+
+describe("POST /api/passkey/register/options — null transports branch", () => {
+  it("maps credentials with null transports to undefined (falsy branch)", async () => {
+    // Insert a credential with NULL transports so the `cr.transports ? ... : undefined`
+    // false branch is exercised when building excludeCredentials.
+    db.exec(
+      `INSERT INTO webauthn_credentials (credential_id, public_key, counter, transports, created_at)
+       VALUES ('null-transport-cred', 'AQID', 0, NULL, ${Date.now()})`
+    );
+    const h = await authedHeaders();
+    const r = await req("/api/passkey/register/options", { method: "POST", headers: h });
+    // The endpoint must still succeed — the null-transports credential is mapped
+    // to { id, transports: undefined } which is valid for excludeCredentials.
+    expect(r.status).toBe(200);
   });
 });

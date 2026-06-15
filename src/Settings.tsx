@@ -12,12 +12,21 @@ type TokenMeta = {
   last_used_at: number | null;
 };
 
+type PasskeyMeta = {
+  id: number;
+  credential_id: string;
+  transports: string[];
+  created_at: number;
+};
+
 export function Settings({ flash }: { flash: (msg: string) => void }) {
   const [tokens, setTokens] = useState<TokenMeta[]>([]);
   const [label, setLabel] = useState("");
   const [created, setCreated] = useState<string | null>(null); // plaintext, shown once
   const [loading, setLoading] = useState(true);
   const [passkeyMsg, setPasskeyMsg] = useState<string | null>(null);
+  const [passkeys, setPasskeys] = useState<PasskeyMeta[]>([]);
+  const [passkeysLoading, setPasskeysLoading] = useState(true);
 
   async function load() {
     try {
@@ -30,8 +39,20 @@ export function Settings({ flash }: { flash: (msg: string) => void }) {
     }
   }
 
+  async function loadPasskeys() {
+    try {
+      const r = await api("/passkey/credentials");
+      setPasskeys(r.ok ? await r.json() : []);
+    } catch {
+      setPasskeys([]);
+    } finally {
+      setPasskeysLoading(false);
+    }
+  }
+
   useEffect(() => {
     load();
+    loadPasskeys();
   }, []);
 
   async function create() {
@@ -72,12 +93,18 @@ export function Settings({ flash }: { flash: (msg: string) => void }) {
       });
       if (verRes.ok) {
         setPasskeyMsg("Passkey registered successfully.");
+        await loadPasskeys();
       } else {
         setPasskeyMsg("Passkey registration failed.");
       }
     } catch {
       setPasskeyMsg("Passkey registration was cancelled or failed.");
     }
+  }
+
+  async function deletePasskey(id: number) {
+    await api(`/passkey/credentials/${id}`, { method: "DELETE" });
+    await loadPasskeys();
   }
 
   return (
@@ -131,6 +158,21 @@ export function Settings({ flash }: { flash: (msg: string) => void }) {
       <p className="muted">Register a passkey (fingerprint, Face ID, or hardware key) as an additional login option.</p>
       <button onClick={registerPasskey}>Passkey 등록</button>
       {passkeyMsg && <p className="muted">{passkeyMsg}</p>}
+
+      <ul className="token-list">
+        {passkeys.map((pk) => (
+          <li key={pk.id}>
+            <span className="token-label">{new Date(pk.created_at).toLocaleDateString()}</span>
+            <span className="muted">{pk.transports.length > 0 ? pk.transports.join(", ") : "unknown"}</span>
+            <button className="del" onClick={() => deletePasskey(pk.id)}>
+              Delete
+            </button>
+          </li>
+        ))}
+        {passkeys.length === 0 && (
+          <li className="empty">{passkeysLoading ? "Loading…" : "No passkeys registered"}</li>
+        )}
+      </ul>
     </div>
   );
 }

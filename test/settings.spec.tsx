@@ -43,16 +43,20 @@ afterEach(() => {
 
 describe("Settings — token list", () => {
   it("lists active tokens with label and usage state", async () => {
-    handler = (path, method) =>
-      path === "/tokens" && method === "GET"
-        ? json([
-            { id: 1, label: "phone", created_at: 1, last_used_at: 5 },
-            { id: 2, label: "", created_at: 2, last_used_at: null },
-          ])
-        : json({}, 404);
+    handler = (path, method) => {
+      if (path === "/tokens" && method === "GET")
+        return json([
+          { id: 1, label: "phone", created_at: 1, last_used_at: 5 },
+          { id: 2, label: "", created_at: 2, last_used_at: null },
+        ]);
+      if (path === "/passkey/credentials" && method === "GET") return json([]);
+      return json({}, 404);
+    };
 
     const { container } = render(<Settings flash={vi.fn()} />);
-    await waitFor(() => expect(container.querySelectorAll(".token-list li").length).toBe(2));
+    await waitFor(() =>
+      expect(container.querySelectorAll(".token-list")[0].querySelectorAll("li").length).toBe(2)
+    );
     expect(container.textContent).toContain("phone");
     expect(container.textContent).toContain("(no label)"); // empty label fallback
     expect(container.textContent).toContain("used");
@@ -67,7 +71,7 @@ describe("Settings — token list", () => {
 
   it("falls back to an empty list when the list request is not ok", async () => {
     handler = (path, method) =>
-      path === "/tokens" && method === "GET" ? new Response("", { status: 500 }) : json({});
+      path === "/tokens" && method === "GET" ? new Response("", { status: 500 }) : json([]);
     const { container } = render(<Settings flash={vi.fn()} />);
     await waitFor(() => expect(container.textContent).toContain("No tokens yet"));
   });
@@ -87,6 +91,7 @@ describe("Settings — generate / copy / revoke", () => {
       if (path === "/tokens" && method === "GET") return json([]);
       if (path === "/tokens" && method === "POST")
         return json({ id: 9, label: "siri", created_at: 1, last_used_at: null, token: "nemo_secret" }, 201);
+      if (path === "/passkey/credentials" && method === "GET") return json([]);
       return json({}, 404);
     };
     const writeText = vi.fn().mockResolvedValue(undefined);
@@ -120,6 +125,7 @@ describe("Settings — generate / copy / revoke", () => {
       if (path === "/tokens" && method === "GET") return json([]);
       if (path === "/tokens" && method === "POST")
         return json({ id: 9, label: "", created_at: 1, last_used_at: null, token: "nemo_x" }, 201);
+      if (path === "/passkey/credentials" && method === "GET") return json([]);
       return json({}, 404);
     };
     setClipboard(vi.fn().mockRejectedValue(new Error("denied")));
@@ -144,6 +150,7 @@ describe("Settings — generate / copy / revoke", () => {
         list = [];
         return json({ ok: true });
       }
+      if (path === "/passkey/credentials" && method === "GET") return json([]);
       return json({}, 404);
     };
 
@@ -151,6 +158,69 @@ describe("Settings — generate / copy / revoke", () => {
     await waitFor(() => expect(container.textContent).toContain("temp"));
     fireEvent.click(container.querySelector(".token-list .del")!);
     await waitFor(() => expect(container.textContent).toContain("No tokens yet"));
+  });
+});
+
+describe("Settings — passkey list", () => {
+  it("shows registered passkeys with date and transports", async () => {
+    const now = new Date(2024, 0, 15).getTime(); // Jan 15 2024
+    handler = (path, method) => {
+      if (path === "/tokens" && method === "GET") return json([]);
+      if (path === "/passkey/credentials" && method === "GET")
+        return json([{ id: 1, credential_id: "cred-abc", transports: ["internal"], created_at: now }]);
+      return json({}, 404);
+    };
+    const { container } = render(<Settings flash={vi.fn()} />);
+    await waitFor(() => expect(container.textContent).toContain("internal"));
+  });
+
+  it("shows 'unknown' when transports is empty", async () => {
+    handler = (path, method) => {
+      if (path === "/tokens" && method === "GET") return json([]);
+      if (path === "/passkey/credentials" && method === "GET")
+        return json([{ id: 1, credential_id: "cred-abc", transports: [], created_at: Date.now() }]);
+      return json({}, 404);
+    };
+    const { container } = render(<Settings flash={vi.fn()} />);
+    await waitFor(() => expect(container.textContent).toContain("unknown"));
+  });
+
+  it("shows 'No passkeys registered' when list is empty", async () => {
+    handler = (path, method) => {
+      if (path === "/tokens" && method === "GET") return json([]);
+      if (path === "/passkey/credentials" && method === "GET") return json([]);
+      return json({}, 404);
+    };
+    const { container } = render(<Settings flash={vi.fn()} />);
+    await waitFor(() => expect(container.textContent).toContain("No passkeys registered"));
+  });
+
+  it("deletes a passkey and refreshes the list", async () => {
+    let passkeys = [{ id: 7, credential_id: "cred-del", transports: ["usb"], created_at: Date.now() }];
+    handler = (path, method) => {
+      if (path === "/tokens" && method === "GET") return json([]);
+      if (path === "/passkey/credentials" && method === "GET") return json(passkeys);
+      if (path === "/passkey/credentials/7" && method === "DELETE") {
+        passkeys = [];
+        return json({ ok: true });
+      }
+      return json({}, 404);
+    };
+    const { container } = render(<Settings flash={vi.fn()} />);
+    await waitFor(() => expect(container.textContent).toContain("usb"));
+    const delBtns = container.querySelectorAll(".token-list .del");
+    fireEvent.click(delBtns[delBtns.length - 1]); // click last del button (passkey delete)
+    await waitFor(() => expect(container.textContent).toContain("No passkeys registered"));
+  });
+
+  it("falls back to empty list when credentials fetch fails", async () => {
+    handler = (path, method) => {
+      if (path === "/tokens" && method === "GET") return json([]);
+      if (path === "/passkey/credentials" && method === "GET") return new Response("", { status: 500 });
+      return json({}, 404);
+    };
+    const { container } = render(<Settings flash={vi.fn()} />);
+    await waitFor(() => expect(container.textContent).toContain("No passkeys registered"));
   });
 });
 
@@ -175,6 +245,7 @@ describe("Settings — passkey registration", () => {
   it("shows 'Passkey registered successfully' on success", async () => {
     handler = (path, method) => {
       if (path === "/tokens" && method === "GET") return json([]);
+      if (path === "/passkey/credentials" && method === "GET") return json([]);
       if (path === "/passkey/register/options" && method === "POST") return json(fakeOptions);
       if (path === "/passkey/register/verify" && method === "POST") return json({ ok: true });
       return json({}, 404);
@@ -197,6 +268,7 @@ describe("Settings — passkey registration", () => {
   it("shows failure message when options fetch fails", async () => {
     handler = (path, method) => {
       if (path === "/tokens" && method === "GET") return json([]);
+      if (path === "/passkey/credentials" && method === "GET") return json([]);
       if (path === "/passkey/register/options" && method === "POST")
         return new Response("", { status: 500 });
       return json({}, 404);
@@ -217,6 +289,7 @@ describe("Settings — passkey registration", () => {
   it("shows failure message when verify fails", async () => {
     handler = (path, method) => {
       if (path === "/tokens" && method === "GET") return json([]);
+      if (path === "/passkey/credentials" && method === "GET") return json([]);
       if (path === "/passkey/register/options" && method === "POST") return json(fakeOptions);
       if (path === "/passkey/register/verify" && method === "POST")
         return new Response("", { status: 400 });
@@ -239,6 +312,7 @@ describe("Settings — passkey registration", () => {
     vi.mocked(startRegistration).mockRejectedValue(new Error("user cancelled"));
     handler = (path, method) => {
       if (path === "/tokens" && method === "GET") return json([]);
+      if (path === "/passkey/credentials" && method === "GET") return json([]);
       if (path === "/passkey/register/options" && method === "POST") return json(fakeOptions);
       return json({}, 404);
     };

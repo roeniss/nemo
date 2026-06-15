@@ -772,7 +772,12 @@ export default function App() {
         return [...readList(TEMPS_KEY), ...reconciled].sort(byRecent);
       });
       const id = currentIdRef.current;
-      if (id == null || id < 0 || timer.current != null || conflictRef.current || deletedRef.current) return; // skip temp / mid-edit / conflict / deleted
+      // skip temp / mid-edit / in-flight save / pending save / conflict / deleted.
+      // inFlight is checked because the debounce sets timer.current to null before
+      // save() completes, so during an in-flight save the base (loadedAt) hasn't been
+      // updated yet — sync fetching and updating loadedAt would race with the write and
+      // raise a false "changed in another session" conflict.
+      if (id == null || id < 0 || timer.current != null || inFlight.current || pendingSave.current != null || conflictRef.current || deletedRef.current) return;
       if (kv.get(DRAFT + id) != null) return; // unsynced local draft pending
       const cur = list.find((x) => x.id === id);
       if (cur && cur.updated_at > loadedAt.current) {

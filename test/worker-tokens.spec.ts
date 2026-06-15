@@ -158,7 +158,7 @@ describe("integration surface /api/ext/memos (Bearer-gated)", () => {
       .prepare("SELECT title, content FROM memos ORDER BY id DESC LIMIT 1")
       .first<{ title: string; content: string }>();
     expect(memo?.title).toBe("TODO: make a shower");
-    expect(memo?.content).toBe("TODO: make a shower");
+    expect(memo?.content).toBe("# TODO: make a shower");
 
     // a successful call stamps last_used_at, surfaced in the settings list
     const list = (await (

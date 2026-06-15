@@ -1,112 +1,88 @@
 import { test, expect } from "./fixtures";
-import { sel, purge, blankMemo } from "./helpers";
+import { sel, purge, blankMemo, uniq } from "./helpers";
 
 const hashId = (page: import("@playwright/test").Page) =>
   page.evaluate(() => Number(location.hash.replace("#", "")));
+
+const tempsOf = (page: import("@playwright/test").Page) =>
+  page.evaluate(() => JSON.parse(localStorage.getItem("qm-temps") || "[]") as { id: number }[]);
 
 // the shared local D1 carries many leftover "Untitled" rows, so target the
 // current memo by the .active row rather than by title
 const activeRow = (page: import("@playwright/test").Page) =>
   page.locator(`${sel.list}.active`);
 
-test.describe("empty-memo cleanup", () => {
-  test("an untouched new memo is purged when you leave it", async ({ page, request }) => {
+test.describe("untouched memos stay off the server (#51)", () => {
+  test("an untouched new memo is a local temp, never uploaded", async ({ page }) => {
     await blankMemo(page);
-    const emptyId = await hashId(page);
-    expect(emptyId).toBeGreaterThan(0);
+    const tempId = await hashId(page);
+    expect(tempId).toBeLessThan(0); // a local temp id (negative) — not a server row
 
-    // create another memo → leaving the blank one purges it
+    // create another memo → leaving the blank one drops it locally
     await page.locator(sel.newBtn).click();
-    await expect(page).not.toHaveURL(new RegExp(`#${emptyId}$`));
-    const keepId = await hashId(page);
-    try {
-      const r = await request.get(`/api/memos/${emptyId}`);
-      expect(r.status()).toBe(404); // hard-purged, not just trashed
-    } finally {
-      await purge(request, keepId);
-    }
+    await expect(page).not.toHaveURL(new RegExp(`#${tempId}$`));
+    // the next one is also a local temp until it gets content
+    expect(await hashId(page)).toBeLessThan(0);
   });
 
-  test("an untouched new memo is purged on tab reload (beforeunload)", async ({ page, request }) => {
+  test("an untouched new memo leaves nothing behind on reload (beforeunload)", async ({ page }) => {
     await blankMemo(page);
-    const emptyId = await hashId(page);
-    expect(emptyId).toBeGreaterThan(0);
+    const tempId = await hashId(page);
+    expect(tempId).toBeLessThan(0);
+    expect((await tempsOf(page)).some((t) => t.id === tempId)).toBe(true);
 
-    await page.reload(); // fires beforeunload → keepalive purge
+    await page.reload(); // beforeunload drops the blank temp; boot cleanup is the backstop
     await expect(page.locator(sel.editor)).toBeVisible();
-    const keepId = await hashId(page);
-    try {
-      // keepalive runs during unload; poll until the server reflects the purge
-      await expect
-        .poll(async () => (await request.get(`/api/memos/${emptyId}`)).status())
-        .toBe(404);
-    } finally {
-      await purge(request, keepId);
-    }
+
+    // the abandoned blank temp is gone from local storage (and was never on the server)
+    expect((await tempsOf(page)).some((t) => t.id === tempId)).toBe(false);
   });
 
-  test("a new memo with content is NOT purged", async ({ page, request }) => {
+  test("a new memo with content materializes to the server", async ({ page, request }) => {
     await blankMemo(page);
+    expect(await hashId(page)).toBeLessThan(0); // starts as a local temp
     await page.locator(sel.editor).click();
-    await page.keyboard.type("Keep me\n\nhas content");
+    const body = uniq("Keep");
+    await page.keyboard.type(`${body}\n\nhas content`);
     await expect(page.locator(".status")).toHaveText("Saved");
+
+    // focus triggers sync()/materializeTemps() (the e2e fixture slows the poll timer)
+    await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+    await expect(page).toHaveURL(/#\d+$/); // now a real (positive) server id
     const id = await hashId(page);
+    expect(id).toBeGreaterThan(0);
     try {
-      await page.locator(sel.newBtn).click(); // leave it
-      await expect(page).not.toHaveURL(new RegExp(`#${id}$`));
       const r = await request.get(`/api/memos/${id}`);
-      expect(r.ok()).toBeTruthy(); // still there
-    } finally {
-      await purge(request, id);
-      await purge(request, await hashId(page));
-    }
-  });
-
-  // bug: clicking the open "Untitled" row in the sidebar used to purge it via
-  // leaveCurrent() and then re-open the now-deleted memo, so it vanished
-  test("clicking the open Untitled memo in the sidebar keeps it", async ({ page, request }) => {
-    await blankMemo(page);
-    const id = await hashId(page);
-    try {
-      await activeRow(page).locator(".memo-title").click();
-
-      // still the current memo, still in the list, still on the server
-      await expect(page).toHaveURL(new RegExp(`#${id}$`));
-      await expect(activeRow(page)).toHaveCount(1);
-      await expect(page.locator(sel.editor)).toHaveValue("# ");
-      expect((await request.get(`/api/memos/${id}`)).ok()).toBeTruthy();
+      expect(r.ok()).toBeTruthy();
+      expect(((await r.json()) as { content: string }).content).toContain("has content");
     } finally {
       await purge(request, id);
     }
   });
 
-  // bug: deleting an unchanged Untitled memo should hard-purge it, not send an
-  // empty placeholder to the Trash
-  test("deleting an unchanged Untitled memo purges it instead of trashing it", async ({
-    page,
-    request,
-  }) => {
+  // re-clicking the open Untitled temp in the sidebar must not drop it
+  test("clicking the open Untitled temp in the sidebar keeps it", async ({ page }) => {
     await blankMemo(page);
-    const id = await hashId(page);
-    let purged = false;
-    try {
-      await activeRow(page).locator(".del").click();
-      await expect(page).not.toHaveURL(new RegExp(`#${id}$`));
+    const tempId = await hashId(page);
+    expect(tempId).toBeLessThan(0);
 
-      // gone from trash too (a soft-delete would leave /api/trash/:id readable);
-      // poll since the purge DELETE is fire-and-forget from the click handler
-      await expect
-        .poll(async () => (await request.get(`/api/trash/${id}`)).status())
-        .toBe(404);
-      await expect
-        .poll(async () => (await request.get(`/api/memos/${id}`)).status())
-        .toBe(404);
-      purged = true;
+    await activeRow(page).locator(".memo-title").click();
 
-      // no Undo toast for an unchanged memo
-      await expect(page.locator(sel.toast)).toHaveCount(0);
-    } finally {
-      if (!purged) await purge(request, id);
-    }
+    await expect(page).toHaveURL(new RegExp(`#${tempId}$`));
+    await expect(activeRow(page)).toHaveCount(1);
+    await expect(page.locator(sel.editor)).toHaveValue("# ");
+  });
+
+  // deleting an unchanged Untitled temp drops it locally — no trash, no undo toast
+  test("deleting an unchanged Untitled temp drops it (no trash, no toast)", async ({ page }) => {
+    await blankMemo(page);
+    const tempId = await hashId(page);
+    expect(tempId).toBeLessThan(0);
+
+    await activeRow(page).locator(".del").click();
+    await expect(page).not.toHaveURL(new RegExp(`#${tempId}$`));
+
+    await expect(page.locator(sel.toast)).toHaveCount(0); // no undo toast for an unchanged memo
+    expect((await tempsOf(page)).some((t) => t.id === tempId)).toBe(false); // gone from local temps
   });
 });

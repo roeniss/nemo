@@ -1,4 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { startAuthentication, startRegistration } from "@simplewebauthn/browser";
+import type { PublicKeyCredentialRequestOptionsJSON, PublicKeyCredentialCreationOptionsJSON } from "@simplewebauthn/browser";
 import { kv, hydrate } from "./idb";
 import {
   type MemoMeta,
@@ -147,10 +149,17 @@ export default function App() {
 
   // background auth check + list — UI is already on screen; this fills it in
   useEffect(() => {
-    const temps = readList(TEMPS_KEY);
+    let temps: MemoMeta[] = [];
     // load the IndexedDB content mirror before anything reads drafts/cache
     hydrate()
-      .then(() => api("/memos"))
+      .then(() => {
+        // drop never-typed temps left by a previous session (a new memo created,
+        // then the tab closed/crashed before it got any content) so blank
+        // "Untitled" rows don't pile up locally
+        temps = readList(TEMPS_KEY).filter((t) => !isBlank(kv.get(DRAFT + t.id) ?? ""));
+        writeList(TEMPS_KEY, temps);
+        return api("/memos");
+      })
       .then(async (r) => {
         if (r.status === 401) {
           localStorage.removeItem("qm-authed");
@@ -233,6 +242,16 @@ export default function App() {
     }
   }, [currentId]);
 
+  // shared post-login setup (used by both password login and passkey login)
+  async function afterLogin() {
+    localStorage.setItem("qm-authed", "1");
+    setAuthed(true);
+    const list = (await (await api("/memos")).json()) as MemoMeta[];
+    setMemos(list);
+    setLoading(false);
+    newMemo(); // land in a fresh document, ready to write
+  }
+
   async function login(
     username: string,
     password: string,
@@ -243,13 +262,21 @@ export default function App() {
       body: JSON.stringify({ username, password, turnstileToken }),
     });
     if (!r.ok) return { ok: false, status: r.status };
-    localStorage.setItem("qm-authed", "1");
-    setAuthed(true);
-    const list = (await (await api("/memos")).json()) as MemoMeta[];
-    setMemos(list);
-    setLoading(false);
-    newMemo(); // land in a fresh document, ready to write
+    await afterLogin();
     return { ok: true };
+  }
+
+  async function passkeyLogin(): Promise<void> {
+    const optRes = await api("/passkey/auth/options", { method: "POST" });
+    if (!optRes.ok) throw new Error("options failed");
+    const options = await optRes.json() as PublicKeyCredentialRequestOptionsJSON;
+    const authResp = await startAuthentication({ optionsJSON: options });
+    const verRes = await api("/passkey/auth/verify", {
+      method: "POST",
+      body: JSON.stringify({ response: authResp, challenge: options.challenge }),
+    });
+    if (!verRes.ok) throw new Error("verify failed");
+    await afterLogin();
   }
 
   async function logout() {
@@ -271,27 +298,21 @@ export default function App() {
     }
   }
 
-  // leaving the current memo: purge it if it's a never-used empty memo,
+  // leaving the current memo: drop it if it's a never-used empty memo,
   // otherwise flush any pending save
   async function leaveCurrent() {
     const id = currentIdRef.current;
+    // a never-used new memo is always a local temp (it only reaches the server
+    // once it has content) — so leaving it just drops it locally; there is no
+    // server row to purge
     if (id != null && freshIds.current.has(id) && isBlank(content)) {
       if (timer.current) {
         clearTimeout(timer.current);
         timer.current = null;
       }
       freshIds.current.delete(id);
-      if (id < 0) {
-        // unsynced empty temp — drop it locally
-        writeList(TEMPS_KEY, readList(TEMPS_KEY).filter((t) => t.id !== id));
-        kv.remove(DRAFT + id);
-      } else {
-        try {
-          await api(`/memos/${id}?purge=1`, { method: "DELETE" });
-        } catch {
-          // offline — leave the empty row; it can be cleaned up later
-        }
-      }
+      writeList(TEMPS_KEY, readList(TEMPS_KEY).filter((t) => t.id !== id));
+      kv.remove(DRAFT + id);
       setMemos((ms) => ms.filter((x) => x.id !== id));
       return;
     }
@@ -321,7 +342,9 @@ export default function App() {
     // stale-while-revalidate: show local content INSTANTLY (no network wait),
     // draft beats cache; then revalidate against the server in the background
     const draft = kv.get(DRAFT + id);
-    const local = draft ?? (id < 0 ? "" : kv.get(CONTENT_CACHE + id) ?? "");
+    // draft beats cache; a temp (id<0) is never in CONTENT_CACHE, so this still
+    // yields "" for a contentless temp
+    const local = draft ?? kv.get(CONTENT_CACHE + id) ?? "";
     setContent(local);
     loadedAt.current =
       (id < 0 ? readList(TEMPS_KEY) : readList(LIST_CACHE)).find((m) => m.id === id)?.updated_at ??
@@ -368,28 +391,22 @@ export default function App() {
     deletedRef.current = false;
     setDeleted(false);
     lastSaveAt.current = Date.now();
-    try {
-      const memo = (await (await api("/memos", { method: "POST" })).json()) as Memo;
-      setMemos((m) => [{ id: memo.id, title: memo.title, updated_at: memo.updated_at }, ...m]);
-      setCurrentId(memo.id);
-      setContent(NEW_DOC);
-      loadedAt.current = memo.updated_at;
-      freshIds.current.add(memo.id);
-      focusOnOpen.current = true;
-    } catch {
-      // offline — create a local temp memo (negative id) that syncs on reconnect
-      const id = -Date.now();
-      const meta = { id, title: "Untitled", updated_at: Date.now() };
-      writeList(TEMPS_KEY, [meta, ...readList(TEMPS_KEY)]);
-      kv.set(DRAFT + id, NEW_DOC);
-      setMemos((m) => [meta, ...m]);
-      setCurrentId(id);
-      setContent(NEW_DOC);
-      loadedAt.current = meta.updated_at;
-      freshIds.current.add(id);
-      focusOnOpen.current = true;
-      setOffline(true);
-    }
+    // A new memo starts life as a LOCAL temp (negative id). It is pushed to the
+    // server only once it actually has content (materializeTemps skips blanks), so
+    // an untouched "Untitled" never reaches the server and can't pile up across
+    // sessions (#51). Same behaviour online or offline — creating a memo no longer
+    // touches the network.
+    const now = Date.now();
+    const id = -now;
+    const meta = { id, title: "Untitled", updated_at: now };
+    writeList(TEMPS_KEY, [meta, ...readList(TEMPS_KEY)]);
+    kv.set(DRAFT + id, NEW_DOC);
+    setMemos((m) => [meta, ...m]);
+    setCurrentId(id);
+    setContent(NEW_DOC);
+    loadedAt.current = meta.updated_at;
+    freshIds.current.add(id);
+    focusOnOpen.current = true;
   }
 
   // push local temp memos to the server (on reconnect / focus / poll)
@@ -418,7 +435,8 @@ export default function App() {
             loadedAt.current = real.updated_at;
           }
         } catch {
-          break; // still offline — try again later
+          setOffline(true); // the push failed — we're offline; surface it
+          break; // try again on the next reconnect / focus / poll
         }
       }
     } finally {
@@ -445,34 +463,22 @@ export default function App() {
   async function deleteMemo(id: number) {
     const m = memos.find((x) => x.id === id);
     if (id < 0) {
-      // unsynced temp — drop locally, nothing to trash/undo
-      writeList(TEMPS_KEY, readList(TEMPS_KEY).filter((t) => t.id !== id));
-      kv.remove(DRAFT + id);
-      setMemos((ms) => ms.filter((x) => x.id !== id));
-      if (currentId === id) {
-        openNeighbourOrClear(id);
-      }
-      return;
-    }
-    // a never-used empty memo (created this session, never given content) — purge
-    // it outright instead of sending an "Untitled" placeholder to the trash
-    if (freshIds.current.has(id)) {
+      // unsynced temp — drop locally, nothing to trash/undo. It may be a fresh
+      // never-typed memo (with a pending save) or one with content that hasn't
+      // materialized yet; either way cancel any pending save so it can't resurrect
+      // the row, and clear its fresh mark.
       freshIds.current.delete(id);
       if (currentId === id && timer.current) {
-        clearTimeout(timer.current); // cancel any pending save that would resurrect it
+        clearTimeout(timer.current);
         timer.current = null;
       }
-      // local-first: drop it from the UI immediately, fire the purge in the background
-      kv.remove(CONTENT_CACHE + id);
+      writeList(TEMPS_KEY, readList(TEMPS_KEY).filter((t) => t.id !== id));
       kv.remove(DRAFT + id);
+      kv.remove(CONTENT_CACHE + id);
       setMemos((ms) => ms.filter((x) => x.id !== id));
-      // a fresh memo is purged the moment you leave it, so one in the list is always
-      // the open one — currentId !== id here is unreachable
-      /* v8 ignore next */
       if (currentId === id) {
         openNeighbourOrClear(id);
       }
-      api(`/memos/${id}?purge=1`, { method: "DELETE" }).catch(() => setOffline(true));
       return;
     }
     // local-first: drop it from the UI immediately, fire the delete in the background
@@ -825,9 +831,16 @@ export default function App() {
   useEffect(() => {
     function onUnload(e: BeforeUnloadEvent) {
       const id = currentIdRef.current;
-      if (id == null || id < 0) return; // temp memos already live in localStorage
-      if (freshIds.current.has(id) && isBlank(contentRef.current)) {
-        fetch(`/api/memos/${id}?purge=1`, { method: "DELETE", keepalive: true });
+      if (id == null) return;
+      if (id < 0) {
+        // a never-typed new memo (local temp) — drop it from the list so a blank
+        // "Untitled" doesn't linger across reloads. A temp WITH content already
+        // lives in localStorage and materializes on the next load. Either way
+        // nothing was ever sent to the server, so there's nothing to flush.
+        if (freshIds.current.has(id) && isBlank(contentRef.current)) {
+          writeList(TEMPS_KEY, readList(TEMPS_KEY).filter((t) => t.id !== id));
+          kv.remove(DRAFT + id);
+        }
         return;
       }
       // a debounced edit hasn't fired yet, or a save is mid-flight / queued —
@@ -1075,7 +1088,7 @@ export default function App() {
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
-  if (!authed) return <Login onLogin={login} />;
+  if (!authed) return <Login onLogin={login} onPasskeyLogin={passkeyLogin} />;
 
   return (
     <div className="app">
@@ -1162,6 +1175,7 @@ export default function App() {
                   </li>
                 )}
               </ul>
+              <p className="shortcut-hint">Alt+J / Alt+K to navigate</p>
             </>
           ) : (
             <ul className="memo-list">
@@ -1210,7 +1224,7 @@ export default function App() {
           </span>
           <div className="topbar-actions">
             <button
-              className="ghost theme-toggle"
+              className="ghost theme-toggle icon-btn"
               onClick={() =>
                 setThemePref((p) =>
                   p === "light" ? "dark" : p === "dark" ? "system" : "light"
@@ -1223,8 +1237,35 @@ export default function App() {
                     ? "Dark mode (click to follow system)"
                     : "Following system (click for light)"
               }
+              aria-label={
+                themePref === "light"
+                  ? "Light mode"
+                  : themePref === "dark"
+                    ? "Dark mode"
+                    : "System theme"
+              }
             >
-              {themePref === "light" ? "☀️" : themePref === "dark" ? "🌙" : "🖥️"}
+              {themePref === "light" ? (
+                /* sun */
+                <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <circle cx="12" cy="12" r="5" />
+                  <line x1="12" y1="1" x2="12" y2="3" /><line x1="12" y1="21" x2="12" y2="23" />
+                  <line x1="4.22" y1="4.22" x2="5.64" y2="5.64" /><line x1="18.36" y1="18.36" x2="19.78" y2="19.78" />
+                  <line x1="1" y1="12" x2="3" y2="12" /><line x1="21" y1="12" x2="23" y2="12" />
+                  <line x1="4.22" y1="19.78" x2="5.64" y2="18.36" /><line x1="18.36" y1="5.64" x2="19.78" y2="4.22" />
+                </svg>
+              ) : themePref === "dark" ? (
+                /* moon */
+                <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" />
+                </svg>
+              ) : (
+                /* monitor */
+                <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <rect x="2" y="3" width="20" height="14" rx="2" ry="2" />
+                  <line x1="8" y1="21" x2="16" y2="21" /><line x1="12" y1="17" x2="12" y2="21" />
+                </svg>
+              )}
             </button>
             <a
               className="github-link"
@@ -1239,29 +1280,47 @@ export default function App() {
               </svg>
             </a>
             <button
-              className="download"
+              className="download icon-btn"
               onClick={downloadMemo}
               disabled={currentId == null}
               title="Download this memo as .md"
+              aria-label="Download memo as markdown"
             >
-              ⬇ .md
+              <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                <polyline points="7 10 12 15 17 10" />
+                <line x1="12" y1="15" x2="12" y2="3" />
+              </svg>
             </button>
             <button
-              className="import"
+              className="import icon-btn"
               onClick={() => fileRef.current?.click()}
               title="Import text files — each becomes its own memo"
+              aria-label="Import files"
             >
-              ⬆ Files
+              <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                <polyline points="17 8 12 3 7 8" />
+                <line x1="12" y1="3" x2="12" y2="15" />
+              </svg>
             </button>
             <button
-              className="import-folder"
+              className="import-folder icon-btn"
               onClick={() => folderRef.current?.click()}
               title="Upload a folder — each file becomes its own memo"
+              aria-label="Import folder"
             >
-              ⬆ Folder
+              <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />
+                <polyline points="12 11 12 17" />
+                <polyline points="9 14 12 11 15 14" />
+              </svg>
             </button>
-            <button className="new-memo" onClick={newMemoFromUI} title="New memo (⌘K)">
-              + New
+            <button className="new-memo icon-btn" onClick={newMemoFromUI} title="New memo (⌘K)" aria-label="New memo">
+              <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
+                <line x1="12" y1="5" x2="12" y2="19" />
+                <line x1="5" y1="12" x2="19" y2="12" />
+              </svg>
             </button>
           </div>
           <input
@@ -1388,8 +1447,10 @@ export default function App() {
 
 function Login({
   onLogin,
+  onPasskeyLogin,
 }: {
   onLogin: (u: string, p: string, token: string) => Promise<LoginResult>;
+  onPasskeyLogin: () => Promise<void>;
 }) {
   const [u, setU] = useState("");
   const [p, setP] = useState("");
@@ -1436,6 +1497,15 @@ function Login({
     }
   }
 
+  async function loginWithPasskey() {
+    setMsg(null);
+    try {
+      await onPasskeyLogin();
+    } catch {
+      setMsg("Passkey login failed or was cancelled.");
+    }
+  }
+
   return (
     <div className="center">
       <form className="login" onSubmit={submit}>
@@ -1449,6 +1519,7 @@ function Login({
         />
         {TURNSTILE_SITEKEY && <div ref={widget} className="turnstile" />}
         <button type="submit">Login</button>
+        <button type="button" onClick={loginWithPasskey}>Passkey로 로그인</button>
         {msg && <p className="err">{msg}</p>}
       </form>
     </div>

@@ -39,7 +39,10 @@ test.describe("image paste", () => {
       "data:image/png;base64,AQIDBA=="
     );
 
-    // persisted server-side as part of the memo content
+    // persisted server-side as part of the memo content. A new memo is a local
+    // temp until it materializes; focus pushes it to the server (id turns positive).
+    await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+    await expect(page).toHaveURL(/#\d+$/);
     const id = await hashId(page);
     const body = (await (await request.get(`/api/memos/${id}`)).json()) as { content: string };
     expect(body.content).toContain("data:image/png;base64,AQIDBA==");

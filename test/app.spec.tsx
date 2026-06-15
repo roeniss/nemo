@@ -429,13 +429,29 @@ describe("editing and save", () => {
 // SIDEBAR / TOOLBAR
 // ===========================================================================
 describe("toolbar and sidebar", () => {
-  it("+ New creates another memo", async () => {
+  it("+ New creates another memo (a fresh local temp, not a server row)", async () => {
     authedBoot();
+    server.seed({ title: "Existing", content: "# Existing\n\nbody" });
     const { container } = render(<App />);
-    await waitFor(() => expect(container.querySelector(".new-memo")).toBeTruthy());
-    const before = server.memos.length;
+    await waitFor(() => expect(container.querySelector("textarea.editor")).toBeTruthy());
+    const ta = () => container.querySelector("textarea.editor") as HTMLTextAreaElement;
+    // give the boot memo content so it isn't dropped as a blank temp on leave
+    fireEvent.input(ta(), { target: { value: "# First\n\nkeep me" } });
+    await waitFor(() => expect(ta().value).toContain("keep me"));
+    const before = container.querySelectorAll(".memo-list li").length;
+    // an untouched new memo must NOT hit the server (issue #51)
+    const posted = () =>
+      server.fetchImpl.mock.calls.filter(
+        ([u, i]) => String(u).endsWith("/memos") && (i?.method || "").toUpperCase() === "POST"
+      ).length;
+    const postsBefore = posted();
     fireEvent.click(container.querySelector(".new-memo")!);
-    await waitFor(() => expect(server.memos.length).toBeGreaterThan(before));
+    await waitFor(() => {
+      expect(location.hash).toMatch(/^#-\d+$/); // the new memo is a local temp
+      expect(ta().value).toBe("# "); // a fresh blank doc
+      expect(container.querySelectorAll(".memo-list li").length).toBe(before + 1);
+    });
+    expect(posted()).toBe(postsBefore); // no POST /api/memos for the new (blank) memo
   });
 
   it("toggles the sidebar", async () => {
@@ -689,9 +705,12 @@ describe("keyboard shortcuts", () => {
     fireEvent.keyDown(window, { key: "s", metaKey: true });
     await waitFor(() => expect(row.content).toContain("saved by shortcut"));
 
-    const before = server.memos.length;
     fireEvent.keyDown(window, { key: "k", metaKey: true });
-    await waitFor(() => expect(server.memos.length).toBeGreaterThan(before));
+    // Cmd+K opens a fresh local temp (negative id, blank doc) — no server row
+    await waitFor(() => {
+      expect(location.hash).toMatch(/^#-\d+$/);
+      expect((container.querySelector("textarea.editor") as HTMLTextAreaElement).value).toBe("# ");
+    });
   });
 
   it("Alt+J / Alt+K navigate between memos", async () => {
@@ -717,20 +736,18 @@ describe("keyboard shortcuts", () => {
 // OFFLINE / TEMP FLOWS
 // ===========================================================================
 describe("offline temp flows", () => {
-  it("creates a local temp memo when POST fails, then materializes on focus", async () => {
+  it("keeps a new memo local until it has content, then materializes it", async () => {
     authedBoot();
-    server.opts.postThrows = true;
     const { container } = render(<App />);
-    // boot's newMemo() goes offline -> temp memo (negative id). Wait for the temp
-    // to be the OPEN memo (editor present + a list row) before editing, so onEdit
-    // doesn't no-op on a null currentId.
-    await waitFor(() => expect(container.querySelector(".status.offline")).toBeTruthy());
+    // boot creates a fresh local temp (no network) — a temp row in localStorage…
     await waitFor(() => {
       expect(container.querySelector("textarea.editor")).toBeTruthy();
       expect(JSON.parse(localStorage.getItem(TEMPS_KEY) || "[]").length).toBeGreaterThan(0);
     });
+    // …and crucially nothing on the server yet (an untouched Untitled never uploads)
+    expect(server.memos.length).toBe(0);
 
-    // type content into the temp so it's not blank (so it materializes)
+    // add content → still local-only (no eager upload); the temp's title updates
     const ta = container.querySelector("textarea.editor") as HTMLTextAreaElement;
     await act(async () => {
       fireEvent.input(ta, { target: { value: "# Temp\n\nreal content" } });
@@ -739,11 +756,9 @@ describe("offline temp flows", () => {
       () => expect(JSON.parse(localStorage.getItem(TEMPS_KEY) || "[]")[0]?.title).toBe("Temp"),
       { timeout: 3000 }
     );
+    expect(server.memos.length).toBe(0); // still nothing on the server until a sync runs
 
-    // server reachable now → focus triggers sync()/recover()/materializeTemps().
-    // Re-dispatch inside the poll so a single missed cycle (the materialize guard
-    // or an in-flight recover) doesn't make this flaky.
-    server.opts.postThrows = false;
+    // a focus-triggered sync()/recover()/materializeTemps() pushes it to the server
     await waitFor(
       async () => {
         await act(async () => {
@@ -803,20 +818,35 @@ describe("background sync via focus", () => {
 // BEFOREUNLOAD
 // ===========================================================================
 describe("beforeunload", () => {
-  it("purges an empty fresh memo on unload", async () => {
+  it("drops an empty fresh temp from local storage on unload (no server call)", async () => {
     authedBoot();
     const { container } = render(<App />);
     await waitFor(() => expect(container.querySelector("textarea.editor")).toBeTruthy());
-    // boot created a fresh empty memo → unload should DELETE?purge=1
+    // boot created a fresh blank temp
+    await waitFor(() =>
+      expect(JSON.parse(localStorage.getItem(TEMPS_KEY) || "[]").length).toBeGreaterThan(0)
+    );
     await act(async () => {
       window.dispatchEvent(new Event("beforeunload"));
     });
-    await waitFor(() => {
-      const purge = server.fetchImpl.mock.calls.find(
-        (c) => String(c[0]).includes("purge=1") && (c[1] as RequestInit)?.method === "DELETE"
-      );
-      expect(purge).toBeTruthy();
+    // it's dropped locally — nothing was ever sent to the server, so no purge fetch
+    await waitFor(() => expect(JSON.parse(localStorage.getItem(TEMPS_KEY) || "[]").length).toBe(0));
+    expect(server.fetchImpl.mock.calls.some((c) => String(c[0]).includes("purge=1"))).toBe(false);
+  });
+
+  it("does nothing on unload when no memo is open (id == null)", async () => {
+    authedBoot();
+    const { container } = render(<App />);
+    await waitFor(() => expect(container.querySelector(".side-head .ghost")).toBeTruthy());
+    // logout clears the open memo → currentId becomes null
+    fireEvent.click(container.querySelector(".side-head .ghost")!);
+    await waitFor(() => expect(container.querySelector(".login")).toBeTruthy());
+    const before = server.fetchImpl.mock.calls.length;
+    await act(async () => {
+      window.dispatchEvent(new Event("beforeunload"));
     });
+    // id == null → the handler returns immediately; no further fetch
+    expect(server.fetchImpl.mock.calls.length).toBe(before);
   });
 
   it("warns and pushes when a save is in flight", async () => {
@@ -984,16 +1014,20 @@ describe("extra branches", () => {
 
   it("deletes a temp memo locally without trash/undo", async () => {
     authedBoot();
-    server.opts.postThrows = true; // boot newMemo -> temp memo
     const { container } = render(<App />);
-    await waitFor(() => expect(container.querySelector(".status.offline")).toBeTruthy());
+    // boot creates a local temp (negative id) — no network needed
     await waitFor(() => expect(container.querySelector(".memo-list li")).toBeTruthy());
+    await waitFor(() =>
+      expect(JSON.parse(localStorage.getItem(TEMPS_KEY) || "[]").length).toBeGreaterThan(0)
+    );
 
     // the open temp memo's × deletes it; currentId === id branch resets to center
     const li = container.querySelector(".memo-list li") as HTMLElement;
     fireEvent.click(li.querySelector(".del")!);
     await waitFor(() => expect(JSON.parse(localStorage.getItem(TEMPS_KEY) || "[]").length).toBe(0));
     expect(container.querySelector(".toast")).toBeFalsy(); // no undo toast for temps
+    // nothing was ever sent to the server for an unsynced temp
+    expect(server.fetchImpl.mock.calls.some((c) => (c[1] as RequestInit)?.method === "DELETE")).toBe(false);
   });
 
   it("navigates via hashchange (back/forward)", async () => {
@@ -1129,7 +1163,7 @@ describe("extra branches", () => {
   it("clears a pending save timer when leaving a blank fresh memo", async () => {
     authedBoot();
     const { container } = render(<App />);
-    // no hash → boot creates a fresh blank memo ("# ") tracked in freshIds
+    // no hash → boot creates a fresh blank temp ("# ") tracked in freshIds
     await waitFor(() => expect(container.querySelector("textarea.editor")).toBeTruthy());
     const ta = container.querySelector("textarea.editor") as HTMLTextAreaElement;
     // an edit that stays blank arms the debounced save (timer.current set) without
@@ -1137,20 +1171,18 @@ describe("extra branches", () => {
     await act(async () => {
       fireEvent.input(ta, { target: { value: "#   " } });
     });
-    // leave immediately via + New: leaveCurrent sees fresh + blank + a pending
-    // timer and clears it (App.tsx clearTimeout/timer.current = null), then purges
+    // leave via + New: leaveCurrent sees fresh + blank + a pending timer, clears it
+    // (App.tsx clearTimeout/timer.current = null), then drops the temp locally
     await act(async () => {
       fireEvent.click(container.querySelector(".new-memo")!);
     });
-    await waitFor(() => expect(container.querySelector("textarea.editor")).toBeTruthy());
-    // the purge DELETE ?purge=1 was issued for the abandoned blank memo
-    await waitFor(() =>
-      expect(
-        server.fetchImpl.mock.calls.some(
-          ([u, i]) => String(u).includes("purge=1") && (i?.method || "").toUpperCase() === "DELETE"
-        )
-      ).toBe(true)
-    );
+    await waitFor(() => {
+      // a fresh blank editor for the new temp; the abandoned one was dropped locally
+      expect((container.querySelector("textarea.editor") as HTMLTextAreaElement).value).toBe("# ");
+      expect(JSON.parse(localStorage.getItem(TEMPS_KEY) || "[]").length).toBe(1);
+    });
+    // nothing was ever sent to the server for the abandoned blank memo
+    expect(server.fetchImpl.mock.calls.some(([u]) => String(u).includes("purge=1"))).toBe(false);
   });
 });
 
@@ -1171,8 +1203,8 @@ describe("theme preference init", () => {
       await waitFor(() => expect(container.querySelector(".app")).toBeTruthy());
       await waitFor(() => expect(document.documentElement.dataset.theme).toBe("light"));
       expect(meta.getAttribute("content")).toBe("#ffffff");
-      // the toggle reflects the light preference
-      expect(container.querySelector(".theme-toggle")?.textContent).toBe("☀️");
+      // the toggle reflects the light preference (SVG icon, no text content)
+      expect(container.querySelector(".theme-toggle svg")).toBeTruthy();
     } finally {
       meta.remove();
     }
@@ -1191,7 +1223,7 @@ describe("theme preference init", () => {
       await waitFor(() => expect(container.querySelector(".app")).toBeTruthy());
       await waitFor(() => expect(document.documentElement.dataset.theme).toBe("dark"));
       expect(meta.getAttribute("content")).toBe("#1a1a1a");
-      expect(container.querySelector(".theme-toggle")?.textContent).toBe("🌙");
+      expect(container.querySelector(".theme-toggle svg")).toBeTruthy();
     } finally {
       meta.remove();
     }
@@ -1265,17 +1297,108 @@ describe("openMemo temp + draft branches", () => {
   });
 });
 
-describe("materializeTemps no-draft temp", () => {
-  it("treats a temp with no DRAFT as blank and skips it", async () => {
+describe("blank temp handling", () => {
+  it("skips a blank temp on materialize (no POST) instead of uploading it", async () => {
     authedBoot();
-    // a temp present in qm-temps but with NO draft entry → kv.get returns null →
-    // body = "" (the ?? "" arm) → isBlank → continue (skipped, not POSTed)
-    localStorage.setItem(TEMPS_KEY, JSON.stringify([{ id: -44, title: "NoDraft", updated_at: 5 }]));
+    const { container } = render(<App />);
+    // boot creates a blank temp ("# ")
+    await waitFor(() => expect(JSON.parse(localStorage.getItem(TEMPS_KEY) || "[]").length).toBe(1));
+    // a focus-triggered materializeTemps sees the blank temp and skips it (the
+    // isBlank `continue` arm) — no POST, nothing reaches the server
+    await act(async () => {
+      window.dispatchEvent(new Event("focus"));
+    });
+    await new Promise((r) => setTimeout(r, 30));
+    expect(JSON.parse(localStorage.getItem(TEMPS_KEY) || "[]").length).toBe(1);
+    expect(server.memos.length).toBe(0);
+    expect(
+      server.fetchImpl.mock.calls.some(
+        ([u, i]) => String(u).endsWith("/memos") && (i?.method || "").toUpperCase() === "POST"
+      )
+    ).toBe(false);
+  });
+
+  it("skips a temp whose draft is missing on materialize (no POST)", async () => {
+    authedBoot();
+    const { container } = render(<App />);
+    // wait for boot to FULLY settle (the boot temp is created AFTER the boot cleanup)
+    await waitFor(() =>
+      expect(JSON.parse(localStorage.getItem(TEMPS_KEY) || "[]").length).toBeGreaterThan(0)
+    );
+    await waitFor(() => expect(container.querySelector("textarea.editor")).toBeTruthy());
+    // inject a no-draft temp alongside the boot temp, then materializeTemps via focus →
+    // body = kv.get(DRAFT) (null) ?? "" → "" → isBlank → skipped (no POST)
+    const cur = JSON.parse(localStorage.getItem(TEMPS_KEY) || "[]");
+    localStorage.setItem(TEMPS_KEY, JSON.stringify([...cur, { id: -77, title: "Ghost", updated_at: 9 }]));
+    await act(async () => {
+      window.dispatchEvent(new Event("focus"));
+    });
+    await new Promise((r) => setTimeout(r, 30));
+    expect(
+      JSON.parse(localStorage.getItem(TEMPS_KEY) || "[]").some((t: { id: number }) => t.id === -77)
+    ).toBe(true); // still there, not materialized
+    expect(
+      server.fetchImpl.mock.calls.some(
+        ([u, i]) => String(u).endsWith("/memos") && (i?.method || "").toUpperCase() === "POST"
+      )
+    ).toBe(false);
+  });
+
+  it("ignores a re-entrant materialize while one is already in flight", async () => {
+    authedBoot();
+    // a content temp that materializes; gate its POST so it stays in flight
+    localStorage.setItem(TEMPS_KEY, JSON.stringify([{ id: -88, title: "Gate", updated_at: 1 }]));
+    kv.set(DRAFT + -88, "# Gate\n\nbody");
+    let release: () => void = () => {};
+    const gate = new Promise<void>((r) => (release = r));
+    const orig = server.fetchImpl;
+    let postCount = 0;
+    globalThis.fetch = vi.fn(async (input: any, init: any) => {
+      if (String(input).endsWith("/memos") && (init?.method || "").toUpperCase() === "POST") {
+        postCount++;
+        await gate; // hold the first materialize's POST in flight
+      }
+      return orig(input, init);
+    }) as unknown as typeof fetch;
+
     const { container } = render(<App />);
     await waitFor(() => expect(container.querySelector(".app")).toBeTruthy());
-    // never POSTed/materialized — the temp stays put
+    // boot's materializeTemps POSTs -88 and blocks on the gate (materializing.current = true)
+    await waitFor(() => expect(postCount).toBe(1));
+    // a focus while it's in flight → the re-entrant materializeTemps returns early (guard)
+    await act(async () => {
+      window.dispatchEvent(new Event("focus"));
+    });
+    await act(async () => {
+      release();
+      await Promise.resolve();
+    });
     await new Promise((r) => setTimeout(r, 30));
-    expect(JSON.parse(localStorage.getItem(TEMPS_KEY) || "[]").some((t: { id: number }) => t.id === -44)).toBe(true);
+    expect(postCount).toBe(1); // only one POST — the re-entrant call was guarded out
+  });
+
+  it("drops never-typed leftover temps at boot, keeps ones with content", async () => {
+    authedBoot();
+    server.opts.postThrows = true; // keep the content temp from materializing away
+    localStorage.setItem(
+      TEMPS_KEY,
+      JSON.stringify([
+        { id: -10, title: "HasContent", updated_at: 9 },
+        { id: -11, title: "Untitled", updated_at: 8 }, // never typed (blank draft)
+      ])
+    );
+    kv.set(DRAFT + -10, "# HasContent\n\nbody");
+    // -11 has NO draft at all → kv.get returns null → `?? ""` → blank → dropped
+    const { container } = render(<App />);
+    await waitFor(() => expect(container.querySelector(".app")).toBeTruthy());
+    await waitFor(() =>
+      expect(
+        JSON.parse(localStorage.getItem(TEMPS_KEY) || "[]").some((t: { id: number }) => t.id === -11)
+      ).toBe(false)
+    ); // no-draft (blank) temp dropped at boot
+    expect(
+      JSON.parse(localStorage.getItem(TEMPS_KEY) || "[]").some((t: { id: number }) => t.id === -10)
+    ).toBe(true); // content temp kept
   });
 });
 
@@ -1285,6 +1408,7 @@ describe("deleteMemo title fallback + repeated delete", () => {
     // seed two real memos, one with an EMPTY title so the `m?.title || \"Untitled\"` arm runs
     const blank = server.seed({ title: "", content: "x" }); // content non-blank, title empty
     const other = server.seed({ title: "Other", content: "# Other\n\nbody" });
+    location.hash = "#" + other.id; // open a real memo so boot doesn't add an Untitled temp
     const { container } = render(<App />);
     await waitFor(() => expect(container.querySelectorAll(".memo-list li").length).toBeGreaterThanOrEqual(2));
 
@@ -1337,18 +1461,19 @@ describe("empty-title rendering", () => {
 describe("save serialization on a temp with siblings", () => {
   it("saves a temp memo and leaves sibling rows untouched (false arm of the title map)", async () => {
     authedBoot();
-    // keep POSTs failing so boot's materializeTemps can't push the content sibling
-    // (-56) away — both temps must persist so the save() .map hits the `: t` arm
+    // keep POSTs failing so boot's materializeTemps can't push the temps away —
+    // both must persist so the save() .map hits the `: t` arm. Both have content
+    // so the boot cleanup (which drops blank temps) keeps them.
     server.opts.postThrows = true;
     // two temps so save()'s .map over temps/memos hits the `: t` / `: x` false arm
     localStorage.setItem(
       TEMPS_KEY,
       JSON.stringify([
-        { id: -55, title: "Untitled", updated_at: 3 },
+        { id: -55, title: "Temp", updated_at: 3 },
         { id: -56, title: "Sibling", updated_at: 2 },
       ])
     );
-    kv.set(DRAFT + -55, "# ");
+    kv.set(DRAFT + -55, "# Temp\n\nstart");
     kv.set(DRAFT + -56, "# Sibling\n\nsibling body");
     location.hash = "#-55";
     const { container } = render(<App />);
@@ -1717,42 +1842,47 @@ describe("background sync edge branches", () => {
 
   it("skips sync reload for a temp memo (id < 0)", async () => {
     authedBoot();
-    // POSTs stay failing so the open temp can never materialize into a positive id —
-    // it remains id<0 when the focus sync reaches the per-memo reload guard.
-    server.opts.postThrows = true; // boot newMemo → temp (id<0) open
     const { container } = render(<App />);
-    await waitFor(() => expect(container.querySelector(".status.offline")).toBeTruthy());
+    // boot creates a fresh temp (id<0) and opens it
     await waitFor(() => expect(container.querySelector("textarea.editor")).toBeTruthy());
-    // make the list GET succeed (already does) while keeping POST broken; the focus
-    // sync runs the list, then the guard's `id < 0` arm returns before any reload.
+    await waitFor(() => expect(location.hash).toMatch(/^#-\d+$/));
+    // the focus sync runs the list, then the per-memo guard's `id < 0` arm returns
+    // before any reload (a blank temp is also skipped by materializeTemps)
     await act(async () => {
       window.dispatchEvent(new Event("focus"));
     });
     await new Promise((r) => setTimeout(r, 30));
     // still the open temp, no per-memo reload happened
     expect(container.querySelector("textarea.editor")).toBeTruthy();
-    expect(container.querySelector(".app")).toBeTruthy();
+    expect(location.hash).toMatch(/^#-\d+$/);
   });
 
 });
 
 describe("beforeunload temp + in-flight branches", () => {
-  it("does nothing on unload for a temp memo (id < 0)", async () => {
+  it("does nothing on unload for a temp memo with content (id < 0)", async () => {
     authedBoot();
-    server.opts.postThrows = true; // boot → temp memo open
     const { container } = render(<App />);
-    await waitFor(() => expect(container.querySelector(".status.offline")).toBeTruthy());
     await waitFor(() => expect(container.querySelector("textarea.editor")).toBeTruthy());
+    // give the boot temp content so it's no longer a fresh-blank temp
+    const ta = container.querySelector("textarea.editor") as HTMLTextAreaElement;
+    await act(async () => {
+      fireEvent.input(ta, { target: { value: "# Has content\n\nbody" } });
+    });
+    await waitFor(() =>
+      expect(JSON.parse(localStorage.getItem(TEMPS_KEY) || "[]")[0]?.title).toBe("Has content")
+    );
 
     const before = server.fetchImpl.mock.calls.length;
     await act(async () => {
       window.dispatchEvent(new Event("beforeunload"));
     });
-    // id < 0 → handler returns immediately; no purge/PUT fetch was issued
+    // id < 0 with content → handler returns; no purge/PUT, and the temp is kept
     const after = server.fetchImpl.mock.calls
       .slice(before)
       .find((c) => String(c[0]).includes("purge=1") || (c[1] as RequestInit)?.method === "PUT");
     expect(after).toBeFalsy();
+    expect(JSON.parse(localStorage.getItem(TEMPS_KEY) || "[]").length).toBe(1);
   });
 
   it("warns on unload when a save is in flight (inFlight arm)", async () => {
@@ -1923,32 +2053,6 @@ describe("onDrop no-files branch", () => {
     await new Promise((r) => setTimeout(r, 10));
     expect((container.querySelector("textarea.editor") as HTMLTextAreaElement).value).toBe(before);
     expect(server.memos.length).toBe(memosBefore);
-  });
-});
-
-describe("openMemo temp with no draft (id<0 empty arm)", () => {
-  it("opens a temp memo (id<0) with no DRAFT, showing an empty editor", async () => {
-    authedBoot();
-    server.opts.postThrows = true; // keep the temp from materializing (and skips blanks anyway)
-    // a temp present in the list with NO draft → openMemo: draft is null → the
-    // `id < 0 ? "" : ...` ternary takes the empty-string arm.
-    localStorage.setItem(TEMPS_KEY, JSON.stringify([{ id: -66, title: "EmptyTemp", updated_at: 9_999_999 }]));
-    location.hash = "";
-    const { container } = render(<App />);
-    await waitFor(() => expect(container.querySelector(".status.offline")).toBeTruthy());
-    await waitFor(() => {
-      const titles = Array.from(container.querySelectorAll(".memo-title")).map((e) => e.textContent);
-      expect(titles).toContain("EmptyTemp");
-    });
-    const li = Array.from(container.querySelectorAll(".memo-list li")).find(
-      (el) => el.querySelector(".memo-title")?.textContent === "EmptyTemp"
-    )!;
-    await act(async () => {
-      fireEvent.click(li);
-    });
-    // opened the temp with no local content → editor renders empty (id<0 "" arm)
-    await waitFor(() => expect(container.querySelector(".memo-list li.active")).toBeTruthy());
-    expect((container.querySelector("textarea.editor") as HTMLTextAreaElement).value).toBe("");
   });
 });
 
@@ -2430,80 +2534,40 @@ describe("trash view document", () => {
 });
 
 // ===========================================================================
-// deleteMemo: a FRESH real memo (positive id, created this session, blank) is
-// hard-purged instead of trashed (lines 391/393/404/405)
+// leaveCurrent: a never-used new memo is always a local temp — opening another
+// memo drops the blank temp on the way out (nothing was ever sent to the server)
 // ===========================================================================
-describe("deleteMemo a fresh real memo", () => {
-  it("purges a never-used fresh memo (positive id) with a pending save timer", async () => {
-    authedBoot();
-    const { container } = render(<App />);
-    // boot creates a fresh blank real memo (positive id, in freshIds) and opens it
-    await waitFor(() => expect(container.querySelector("textarea.editor")).toBeTruthy());
-    const ta = container.querySelector("textarea.editor") as HTMLTextAreaElement;
-    // arm a debounced save (timer.current set) while the memo stays blank+fresh
-    await act(async () => {
-      fireEvent.input(ta, { target: { value: "#  " } });
-    });
-    // make the purge DELETE reject so deleteMemo's `catch { setOffline(true) }` runs (line 400)
-    const orig = server.fetchImpl;
-    const wrapped = vi.fn(async (input: any, init: any) => {
-      if (
-        (init?.method || "GET").toUpperCase() === "DELETE" &&
-        String(input).includes("purge=1")
-      ) {
-        throw new Error("offline purge");
-      }
-      return orig(input, init);
-    });
-    globalThis.fetch = wrapped as unknown as typeof fetch;
-
-    // delete the open fresh memo via its sidebar × → deleteMemo: freshIds.has(id) true,
-    // currentId === id && timer.current → clearTimeout (393), purge DELETE rejects →
-    // catch → setOffline (400), currentId === id → setCurrentId(null)/setContent("") (405)
-    const li = container.querySelector(".memo-list li") as HTMLElement;
-    await act(async () => {
-      fireEvent.click(li.querySelector(".del")!);
-    });
-    await waitFor(() => expect(container.querySelector(".center")).toBeTruthy());
-    expect(container.querySelector(".status.offline")).toBeTruthy();
-    // the purge DELETE was attempted (no undo toast — fresh memos skip trash)
-    await waitFor(() =>
-      expect(
-        wrapped.mock.calls.some(
-          ([u, i]) => String(u).includes("purge=1") && (i?.method || "").toUpperCase() === "DELETE"
-        )
-      ).toBe(true)
-    );
-    expect(container.querySelector(".toast")).toBeFalsy();
-  });
-
-  it("purges a fresh real memo that is NOT the open one (currentId !== id false arms)", async () => {
+describe("leaveCurrent drops a blank temp on navigation", () => {
+  it("drops the blank current temp when opening another memo", async () => {
     authedBoot();
     const { container } = render(<App />);
     await waitFor(() => expect(container.querySelector("textarea.editor")).toBeTruthy());
-    // create a SECOND fresh memo via + New; the previous fresh-blank one is purged on
-    // leave, so make the first non-blank first by typing, then create another.
+    // give the boot temp content so it survives, then create a second (blank) temp
     const ta = container.querySelector("textarea.editor") as HTMLTextAreaElement;
     await act(async () => {
       fireEvent.input(ta, { target: { value: "# Kept\n\nreal" } });
     });
-    await waitFor(() => expect(kv.get(DRAFT) ?? true).toBeTruthy());
-    // + New → a fresh blank memo becomes current; the "Kept" memo stays in the list
+    await waitFor(() =>
+      expect(JSON.parse(localStorage.getItem(TEMPS_KEY) || "[]")[0]?.title).toBe("Kept")
+    );
+    // + New → a fresh blank temp becomes current; the "Kept" temp stays in the list
     await act(async () => {
       fireEvent.click(container.querySelector(".new-memo")!);
     });
     await waitFor(() => expect(container.querySelectorAll(".memo-list li").length).toBeGreaterThanOrEqual(2));
-    // open "Kept" so the fresh blank memo (still positive id, in freshIds) is NOT current
+    // open "Kept" → leaveCurrent drops the blank fresh temp on leave (no server call)
     const keptLi = Array.from(container.querySelectorAll(".memo-list li")).find(
       (el) => el.querySelector(".memo-title")?.textContent === "Kept"
     )!;
     await act(async () => {
-      fireEvent.click(keptLi); // leaveCurrent purges the blank fresh memo on leave
+      fireEvent.click(keptLi);
     });
     await waitFor(() =>
       expect((container.querySelector("textarea.editor") as HTMLTextAreaElement)?.value).toContain("real")
     );
-    expect(container.querySelector(".app")).toBeTruthy();
+    // only the "Kept" temp remains; the abandoned blank one is gone
+    expect(JSON.parse(localStorage.getItem(TEMPS_KEY) || "[]").length).toBe(1);
+    expect(server.fetchImpl.mock.calls.some(([u]) => String(u).includes("purge=1"))).toBe(false);
   });
 });
 
@@ -2726,33 +2790,30 @@ describe("nav effect clears currentId with an already-empty hash (176 false arm)
   });
 });
 
-// line 395: deleteMemo's fresh-purge `if (currentId === id && timer.current)`
-// false arm — delete a FRESH real memo that has NO armed save timer.
-describe("deleteMemo a fresh real memo with no pending timer (395 false arm)", () => {
-  it("purges the boot's fresh blank current memo when no debounce is armed", async () => {
+// deleteMemo's temp branch `if (currentId === id && timer.current)` false arm —
+// delete a blank temp that has NO armed save timer.
+describe("deleteMemo a blank temp with no pending timer", () => {
+  it("drops the boot's fresh blank temp locally when no debounce is armed", async () => {
     authedBoot();
     const { container } = render(<App />);
-    // boot POSTs a fresh blank real memo (positive id, in freshIds) and opens it,
-    // but NOTHING has been typed → timer.current is null (no debounced save armed).
+    // boot creates a fresh blank temp and opens it, but NOTHING has been typed →
+    // timer.current is null (no debounced save armed).
     await waitFor(() => expect(container.querySelector("textarea.editor")).toBeTruthy());
-    await waitFor(() => expect(container.querySelector(".memo-list li")).toBeTruthy());
+    await waitFor(() =>
+      expect(JSON.parse(localStorage.getItem(TEMPS_KEY) || "[]").length).toBeGreaterThan(0)
+    );
 
-    // delete the open fresh memo via its × → freshIds.has(id) true, but
+    // delete the open temp via its × → deleteMemo id<0 branch, but
     // `currentId === id && timer.current` is FALSE (timer.current === null) →
-    // the clearTimeout block is skipped; the purge DELETE still fires.
+    // the clearTimeout block is skipped; the temp is just dropped locally.
     const li = container.querySelector(".memo-list li") as HTMLElement;
     await act(async () => {
       fireEvent.click(li.querySelector(".del")!);
     });
     await waitFor(() => expect(container.querySelector(".center")).toBeTruthy());
-    await waitFor(() =>
-      expect(
-        server.fetchImpl.mock.calls.some(
-          ([u, i]) => String(u).includes("purge=1") && (i?.method || "").toUpperCase() === "DELETE"
-        )
-      ).toBe(true)
-    );
-    // fresh memos never go to trash → no undo toast
+    expect(JSON.parse(localStorage.getItem(TEMPS_KEY) || "[]").length).toBe(0);
+    // a local-only temp → no server call, and no undo toast
+    expect(server.fetchImpl.mock.calls.some((c) => (c[1] as RequestInit)?.method === "DELETE")).toBe(false);
     expect(container.querySelector(".toast")).toBeFalsy();
   });
 });

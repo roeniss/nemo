@@ -1,6 +1,13 @@
 import { Hono } from "hono";
 import { sign, jwt } from "hono/jwt";
 import { setCookie, deleteCookie } from "hono/cookie";
+import {
+  generateRegistrationOptions,
+  verifyRegistrationResponse,
+  generateAuthenticationOptions,
+  verifyAuthenticationResponse,
+} from "@simplewebauthn/server";
+import type { AuthenticatorTransportFuture } from "@simplewebauthn/server";
 
 type Bindings = {
   DB: D1Database;
@@ -165,6 +172,187 @@ app.post("/api/logout", (c) => {
   return c.json({ ok: true });
 });
 
+// --- WebAuthn / passkey endpoints ----------------------------------------
+const CHALLENGE_TTL = 5 * 60 * 1000; // 5 minutes
+
+// Clean up expired challenges (best-effort, called lazily on each challenge request)
+async function cleanupChallenges(db: D1Database) {
+  const cutoff = Date.now() - CHALLENGE_TTL;
+  await db.prepare("DELETE FROM webauthn_challenges WHERE created_at < ?").bind(cutoff).run();
+}
+
+// POST /api/passkey/auth/options — generate authentication challenge (pre-login, no JWT needed)
+app.post("/api/passkey/auth/options", async (c) => {
+  await cleanupChallenges(c.env.DB);
+  const { results: creds } = await c.env.DB.prepare(
+    "SELECT credential_id, transports FROM webauthn_credentials"
+  ).all<{ credential_id: string; transports: string | null }>();
+
+  const options = await generateAuthenticationOptions({
+    rpID: c.req.header("host")?.split(":")[0] ?? "localhost",
+    allowCredentials: creds.map((cr) => ({
+      id: cr.credential_id,
+      transports: cr.transports
+        ? (JSON.parse(cr.transports) as AuthenticatorTransportFuture[])
+        : undefined,
+    })),
+    userVerification: "preferred",
+  });
+
+  // Store the challenge
+  await c.env.DB.prepare(
+    "INSERT OR IGNORE INTO webauthn_challenges (challenge, created_at) VALUES (?, ?)"
+  ).bind(options.challenge, Date.now()).run();
+
+  return c.json(options);
+});
+
+// POST /api/passkey/auth/verify — verify authentication, issue JWT (pre-login, no JWT needed)
+app.post("/api/passkey/auth/verify", async (c) => {
+  const body = await c.req.json<{ response: unknown; challenge: string }>();
+  const { challenge } = body;
+
+  // Look up and consume the challenge
+  const row = await c.env.DB.prepare(
+    "SELECT id, created_at FROM webauthn_challenges WHERE challenge = ?"
+  ).bind(challenge).first<{ id: number; created_at: number }>();
+  if (!row || Date.now() - row.created_at > CHALLENGE_TTL) {
+    return c.json({ error: "invalid or expired challenge" }, 400);
+  }
+  await c.env.DB.prepare("DELETE FROM webauthn_challenges WHERE id = ?").bind(row.id).run();
+
+  // Look up the credential
+  const credId = (body.response as { id?: string }).id ?? "";
+  const cred = await c.env.DB.prepare(
+    "SELECT credential_id, public_key, counter, transports FROM webauthn_credentials WHERE credential_id = ?"
+  ).bind(credId).first<{ credential_id: string; public_key: string; counter: number; transports: string | null }>();
+  if (!cred) return c.json({ error: "credential not found" }, 401);
+
+  const rpID = c.req.header("host")?.split(":")[0] ?? "localhost";
+  const expectedOrigin = c.req.header("origin") ?? `https://${rpID}`;
+
+  let verification;
+  try {
+    verification = await verifyAuthenticationResponse({
+      response: body.response as Parameters<typeof verifyAuthenticationResponse>[0]["response"],
+      expectedChallenge: challenge,
+      expectedOrigin,
+      expectedRPID: rpID,
+      credential: {
+        id: cred.credential_id,
+        publicKey: Uint8Array.from(atob(cred.public_key.replace(/-/g, "+").replace(/_/g, "/")), (c) => c.charCodeAt(0)),
+        counter: cred.counter,
+        transports: cred.transports
+          ? (JSON.parse(cred.transports) as AuthenticatorTransportFuture[])
+          : undefined,
+      },
+    });
+  } catch (err) {
+    return c.json({ error: "verification failed" }, 401);
+  }
+
+  if (!verification.verified) return c.json({ error: "verification failed" }, 401);
+
+  // Update counter
+  await c.env.DB.prepare(
+    "UPDATE webauthn_credentials SET counter = ? WHERE credential_id = ?"
+  ).bind(verification.authenticationInfo.newCounter, cred.credential_id).run();
+
+  // Issue JWT (same as password login)
+  const token = await sign(
+    { sub: c.env.AUTH_USER, exp: Math.floor(Date.now() / 1000) + MAX_AGE },
+    c.env.JWT_SECRET
+  );
+  setCookie(c, COOKIE, token, {
+    httpOnly: true,
+    secure: true,
+    sameSite: "Lax",
+    path: "/",
+    maxAge: MAX_AGE,
+  });
+  return c.json({ ok: true });
+});
+
+// POST /api/passkey/register/options — JWT-protected (registered user only)
+app.post("/api/passkey/register/options", async (c) => {
+  await cleanupChallenges(c.env.DB);
+  const { results: existing } = await c.env.DB.prepare(
+    "SELECT credential_id, transports FROM webauthn_credentials"
+  ).all<{ credential_id: string; transports: string | null }>();
+
+  const options = await generateRegistrationOptions({
+    rpName: "nemo",
+    rpID: c.req.header("host")?.split(":")[0] ?? "localhost",
+    userName: c.env.AUTH_USER,
+    userDisplayName: c.env.AUTH_USER,
+    excludeCredentials: existing.map((cr) => ({
+      id: cr.credential_id,
+      transports: cr.transports
+        ? (JSON.parse(cr.transports) as AuthenticatorTransportFuture[])
+        : undefined,
+    })),
+    authenticatorSelection: {
+      residentKey: "preferred",
+      userVerification: "preferred",
+    },
+  });
+
+  await c.env.DB.prepare(
+    "INSERT OR IGNORE INTO webauthn_challenges (challenge, created_at) VALUES (?, ?)"
+  ).bind(options.challenge, Date.now()).run();
+
+  return c.json(options);
+});
+
+// POST /api/passkey/register/verify — JWT-protected
+app.post("/api/passkey/register/verify", async (c) => {
+  const body = await c.req.json<{ response: unknown; challenge: string }>();
+  const { challenge } = body;
+
+  const row = await c.env.DB.prepare(
+    "SELECT id, created_at FROM webauthn_challenges WHERE challenge = ?"
+  ).bind(challenge).first<{ id: number; created_at: number }>();
+  if (!row || Date.now() - row.created_at > CHALLENGE_TTL) {
+    return c.json({ error: "invalid or expired challenge" }, 400);
+  }
+  await c.env.DB.prepare("DELETE FROM webauthn_challenges WHERE id = ?").bind(row.id).run();
+
+  const rpID = c.req.header("host")?.split(":")[0] ?? "localhost";
+  const expectedOrigin = c.req.header("origin") ?? `https://${rpID}`;
+
+  let verification;
+  try {
+    verification = await verifyRegistrationResponse({
+      response: body.response as Parameters<typeof verifyRegistrationResponse>[0]["response"],
+      expectedChallenge: challenge,
+      expectedOrigin,
+      expectedRPID: rpID,
+    });
+  } catch (err) {
+    return c.json({ error: "verification failed" }, 400);
+  }
+
+  if (!verification.verified || !verification.registrationInfo) {
+    return c.json({ error: "verification failed" }, 400);
+  }
+
+  const { credential } = verification.registrationInfo;
+  const publicKeyB64 = btoa(String.fromCharCode(...credential.publicKey))
+    .replace(/\+/g, "-").replace(/\//g, "_").replace(/=/g, "");
+
+  await c.env.DB.prepare(
+    "INSERT OR REPLACE INTO webauthn_credentials (credential_id, public_key, counter, transports, created_at) VALUES (?, ?, ?, ?, ?)"
+  ).bind(
+    credential.id,
+    publicKeyB64,
+    credential.counter,
+    credential.transports ? JSON.stringify(credential.transports) : null,
+    Date.now()
+  ).run();
+
+  return c.json({ ok: true });
+});
+
 // --- external integration surface (/api/ext/*) --------------------------
 // Token-authenticated API for clients that can't drive the browser JWT login —
 // e.g. a Siri Shortcut ("Hey Siri, make a new note"). Registered before the JWT
@@ -200,11 +388,12 @@ app.post("/api/ext/memos", async (c) => {
   if (typeof content !== "string" || !content.trim()) {
     return c.json({ response: "content required" }, 400);
   }
+  const finalContent = content.startsWith("# ") ? content : `# ${content}`;
   const now = Date.now();
   await c.env.DB.prepare(
     "INSERT INTO memos (title, content, created_at, updated_at) VALUES (?, ?, ?, ?)"
   )
-    .bind(titleFrom(content), content, now, now)
+    .bind(titleFrom(finalContent), finalContent, now, now)
     .run();
   return c.json({ response: "done" }, 201);
 });
@@ -221,7 +410,13 @@ app.use("/api/*", (c, next) => {
   // for them — this guard is a defensive net for any future reordering, hence
   // unreachable under the current routes and excluded from coverage.
   /* v8 ignore next */
-  if (p === "/api/login" || p === "/api/logout" || p.startsWith("/api/ext/")) return next();
+  if (
+    p === "/api/login" ||
+    p === "/api/logout" ||
+    p.startsWith("/api/ext/") ||
+    p === "/api/passkey/auth/options" ||
+    p === "/api/passkey/auth/verify"
+  ) return next();
   return jwt({ secret: c.env.JWT_SECRET, cookie: COOKIE, alg: "HS256" })(c, next);
 });
 

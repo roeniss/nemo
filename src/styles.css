@@ -68,6 +68,16 @@ button.ghost {
   border: none;
   background: transparent;
 }
+.settings-logout {
+  margin-top: 2rem;
+  border-top: 1px solid var(--border);
+  padding-top: 1rem;
+}
+.settings-logout button {
+  border: 1px solid var(--border-strong);
+  background: var(--btn-bg);
+  padding: 6px 12px;
+}
 input {
   font: inherit;
   color: var(--fg);

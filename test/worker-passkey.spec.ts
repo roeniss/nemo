@@ -238,6 +238,23 @@ describe("POST /api/passkey/auth/verify", () => {
     expect((await r.json() as any).ok).toBe(true);
   });
 
+  it("returns 401 when the credential's user no longer exists", async () => {
+    // Credential verifies, but its user_id points at a deleted/non-existent
+    // user row, so the user lookup returns null → 401 "user not found".
+    await insertChallenge("orphan-cred-challenge");
+    db.exec(
+      `INSERT INTO webauthn_credentials (credential_id, public_key, counter, transports, user_id, created_at)
+       VALUES ('cred-orphan', 'AQID', 0, '["internal"]', 999, ${Date.now()})`
+    );
+    const r = await req("/api/passkey/auth/verify", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ response: { id: "cred-orphan" }, challenge: "orphan-cred-challenge" }),
+    });
+    expect(r.status).toBe(401);
+    expect((await r.json() as any).error).toMatch(/user not found/);
+  });
+
   it("returns 401 when verifyAuthenticationResponse throws", async () => {
     const { verifyAuthenticationResponse } = await import("@simplewebauthn/server");
     vi.mocked(verifyAuthenticationResponse).mockRejectedValueOnce(new Error("bad sig"));

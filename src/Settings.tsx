@@ -1,6 +1,8 @@
 // Settings page: manage API tokens for the external integration surface
 // (/api/ext/*, e.g. a Siri Shortcut). Deliberately plain — list, generate, revoke.
 import { useEffect, useState } from "react";
+import { startRegistration } from "@simplewebauthn/browser";
+import type { PublicKeyCredentialCreationOptionsJSON } from "@simplewebauthn/browser";
 import { api } from "./lib";
 
 type TokenMeta = {
@@ -15,6 +17,7 @@ export function Settings({ flash }: { flash: (msg: string) => void }) {
   const [label, setLabel] = useState("");
   const [created, setCreated] = useState<string | null>(null); // plaintext, shown once
   const [loading, setLoading] = useState(true);
+  const [passkeyMsg, setPasskeyMsg] = useState<string | null>(null);
 
   async function load() {
     try {
@@ -56,6 +59,27 @@ export function Settings({ flash }: { flash: (msg: string) => void }) {
     }
   }
 
+  async function registerPasskey() {
+    setPasskeyMsg(null);
+    try {
+      const optRes = await api("/passkey/register/options", { method: "POST" });
+      if (!optRes.ok) { setPasskeyMsg("Failed to get registration options."); return; }
+      const options = await optRes.json() as PublicKeyCredentialCreationOptionsJSON;
+      const regResp = await startRegistration({ optionsJSON: options });
+      const verRes = await api("/passkey/register/verify", {
+        method: "POST",
+        body: JSON.stringify({ response: regResp, challenge: options.challenge }),
+      });
+      if (verRes.ok) {
+        setPasskeyMsg("Passkey registered successfully.");
+      } else {
+        setPasskeyMsg("Passkey registration failed.");
+      }
+    } catch {
+      setPasskeyMsg("Passkey registration was cancelled or failed.");
+    }
+  }
+
   return (
     <div className="settings">
       <h2>API tokens</h2>
@@ -87,6 +111,11 @@ export function Settings({ flash }: { flash: (msg: string) => void }) {
           </div>
         </div>
       )}
+
+      <h2>Passkeys</h2>
+      <p className="muted">Register a passkey (fingerprint, Face ID, or hardware key) as an additional login option.</p>
+      <button onClick={registerPasskey}>Passkey 등록</button>
+      {passkeyMsg && <p className="muted">{passkeyMsg}</p>}
 
       <ul className="token-list">
         {tokens.map((t) => (

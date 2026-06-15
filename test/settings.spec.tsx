@@ -154,6 +154,33 @@ describe("Settings — generate / copy / revoke", () => {
   });
 });
 
+describe("Settings — admin prop", () => {
+  it("does not render AdminPanel when admin is false", async () => {
+    handler = () => json([]);
+    const { container } = render(<Settings flash={vi.fn()} admin={false} />);
+    await waitFor(() => expect(container.textContent).toContain("API tokens"));
+    expect(container.querySelector(".admin-panel")).toBeFalsy();
+  });
+
+  it("does not render AdminPanel when admin prop is omitted", async () => {
+    handler = () => json([]);
+    const { container } = render(<Settings flash={vi.fn()} />);
+    await waitFor(() => expect(container.textContent).toContain("API tokens"));
+    expect(container.querySelector(".admin-panel")).toBeFalsy();
+  });
+
+  it("renders AdminPanel when admin is true", async () => {
+    handler = (path, method) => {
+      if (path === "/tokens" && method === "GET") return json([]);
+      if (path === "/admin/users" || path.startsWith("/admin/")) return json([]);
+      return json({}, 404);
+    };
+    const { container } = render(<Settings flash={vi.fn()} admin={true} />);
+    await waitFor(() => expect(container.querySelector(".admin-panel")).toBeTruthy());
+    expect(container.textContent).toContain("유저 관리");
+  });
+});
+
 describe("Settings — passkey registration", () => {
   const fakeOptions = {
     challenge: "test-challenge-abc",

@@ -57,6 +57,7 @@ export default function App() {
   const [authed, setAuthed] = useState<boolean>(
     () => localStorage.getItem("qm-authed") === "1"
   );
+  const [currentUser, setCurrentUser] = useState<{ uid: number; username: string; admin: boolean } | null>(null);
   const [loading, setLoading] = useState(true);
   const [memos, setMemos] = useState<MemoMeta[]>([]);
   const [trash, setTrash] = useState<MemoMeta[]>([]);
@@ -246,6 +247,8 @@ export default function App() {
   async function afterLogin() {
     localStorage.setItem("qm-authed", "1");
     setAuthed(true);
+    const meRes = await api("/me");
+    if (meRes.ok) setCurrentUser(await meRes.json());
     const list = (await (await api("/memos")).json()) as MemoMeta[];
     setMemos(list);
     setLoading(false);
@@ -284,6 +287,7 @@ export default function App() {
     await api("/logout", { method: "POST" });
     localStorage.removeItem("qm-authed");
     setAuthed(false);
+    setCurrentUser(null);
     setMemos([]);
     setCurrentId(null);
     setContent("");
@@ -1260,7 +1264,7 @@ export default function App() {
         )}
 
         {view === "settings" ? (
-          <Settings flash={flash} />
+          <Settings flash={flash} admin={currentUser?.admin} />
         ) : viewing ? (
           <div className="pane">
             <textarea

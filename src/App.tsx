@@ -266,11 +266,11 @@ export default function App() {
     return { ok: true };
   }
 
-  async function passkeyLogin(): Promise<void> {
+  async function passkeyLogin(useBrowserAutofill = false): Promise<void> {
     const optRes = await api("/passkey/auth/options", { method: "POST" });
     if (!optRes.ok) throw new Error("options failed");
     const options = await optRes.json() as PublicKeyCredentialRequestOptionsJSON;
-    const authResp = await startAuthentication({ optionsJSON: options });
+    const authResp = await startAuthentication({ optionsJSON: options, ...(useBrowserAutofill ? { useBrowserAutofill: true } : {}) });
     const verRes = await api("/passkey/auth/verify", {
       method: "POST",
       body: JSON.stringify({ response: authResp, challenge: options.challenge }),
@@ -970,7 +970,7 @@ export default function App() {
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
-  if (!authed) return <Login onLogin={login} onPasskeyLogin={passkeyLogin} />;
+  if (!authed) return <Login onLogin={login} onPasskeyLogin={passkeyLogin} onConditionalPasskeyLogin={() => passkeyLogin(true)} />;
 
   return (
     <div className="app">
@@ -1329,15 +1329,26 @@ export default function App() {
 function Login({
   onLogin,
   onPasskeyLogin,
+  onConditionalPasskeyLogin,
 }: {
   onLogin: (u: string, p: string, token: string) => Promise<LoginResult>;
   onPasskeyLogin: () => Promise<void>;
+  onConditionalPasskeyLogin: () => Promise<void>;
 }) {
   const [u, setU] = useState("");
   const [p, setP] = useState("");
   const [msg, setMsg] = useState<string | null>(null);
   const [token, setToken] = useState("");
   const widget = useRef<HTMLDivElement>(null);
+
+  // WebAuthn conditional UI: silently offer passkeys via browser autofill on mount.
+  // Any error (no passkeys, user cancels, browser doesn't support it) is swallowed
+  // so the normal login form stays fully usable.
+  useEffect(() => {
+    onConditionalPasskeyLogin().catch(() => {
+      // silently ignore: no passkeys registered, user dismissed, browser unsupported, etc.
+    });
+  }, []);
 
   // load + render the Turnstile widget (only when a site key is configured)
   useEffect(() => {
@@ -1391,7 +1402,7 @@ function Login({
     <div className="center">
       <form className="login" onSubmit={submit}>
         <h1>nemo</h1>
-        <input placeholder="id" value={u} onChange={(e) => setU(e.currentTarget.value)} autoFocus />
+        <input placeholder="id" value={u} onChange={(e) => setU(e.currentTarget.value)} autoFocus autoComplete="username webauthn" />
         <input
           type="password"
           placeholder="password"

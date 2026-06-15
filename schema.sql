@@ -1,7 +1,20 @@
+-- application users. The login password is never stored plaintext: password_hash
+-- holds a salted PBKDF2 hash (`pbkdf2:<iters>:<saltB64>:<hashB64>`; mint with
+-- scripts/hash-password.mjs). is_admin gates admin-only surfaces.
+CREATE TABLE IF NOT EXISTS users (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  username TEXT NOT NULL UNIQUE,
+  password_hash TEXT NOT NULL,
+  is_admin INTEGER NOT NULL DEFAULT 0,
+  created_at INTEGER NOT NULL,
+  last_login_at INTEGER -- stamped on each successful login
+);
+
 CREATE TABLE IF NOT EXISTS memos (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   title TEXT NOT NULL DEFAULT 'Untitled',
   content TEXT NOT NULL DEFAULT '',
+  user_id INTEGER NOT NULL, -- owning user
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL,
   deleted_at INTEGER,
@@ -28,6 +41,7 @@ CREATE TABLE IF NOT EXISTS api_tokens (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   label TEXT NOT NULL DEFAULT '',
   token_hash TEXT NOT NULL UNIQUE,
+  user_id INTEGER NOT NULL, -- owning user
   created_at INTEGER NOT NULL,
   last_used_at INTEGER, -- stamped on each successful /api/ext/* call
   revoked_at INTEGER    -- soft-revoke: row kept, token stops authenticating
@@ -42,6 +56,7 @@ CREATE TABLE IF NOT EXISTS webauthn_credentials (
   public_key TEXT NOT NULL,           -- base64url-encoded COSE public key
   counter INTEGER NOT NULL DEFAULT 0,
   transports TEXT,                    -- JSON array of transport hints
+  user_id INTEGER NOT NULL,           -- owning user
   created_at INTEGER NOT NULL
 );
 

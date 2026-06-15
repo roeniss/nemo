@@ -27,8 +27,10 @@ export default defineConfig({
     },
   ],
   webServer: {
-    // apply the schema to the local D1, then boot the worker+client dev server
-    command: "npm run db:local && npm run dev",
+    // apply the schema to the local D1, seed the login user (the worker now
+    // authenticates against the users table, not AUTH_* env vars), then boot the
+    // worker+client dev server
+    command: "npm run db:local && npm run db:seed-test-user && npm run dev",
     url: BASE,
     reuseExistingServer: !process.env.CI,
     timeout: 180_000,

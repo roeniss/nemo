@@ -626,6 +626,83 @@ describe("trash", () => {
 });
 
 // ===========================================================================
+// URL HASH ROUTING  (navigateTo + boot restore + hashchange handler)
+// ===========================================================================
+describe("url hash routing", () => {
+  it("navigateTo writes the hash for named views and clears it for memos", async () => {
+    authedBoot();
+    const { container } = render(<App />);
+    await waitFor(() => expect(container.querySelector(".side-tabs")).toBeTruthy());
+
+    // Settings view → #settings
+    fireEvent.click(container.querySelector(".settings-toggle")!);
+    await waitFor(() => expect(container.querySelector(".settings")).toBeTruthy());
+    expect(location.hash).toBe("#settings");
+
+    // Trash view → #trash
+    fireEvent.click(container.querySelectorAll(".side-tabs button")[1]);
+    await waitFor(() => expect(container.querySelectorAll(".side-tabs button")[1].className).toContain("active"));
+    expect(location.hash).toBe("#trash");
+
+    // Memos view → hash cleared
+    fireEvent.click(container.querySelectorAll(".side-tabs button")[0]);
+    await waitFor(() => expect(container.querySelector(".search")).toBeTruthy());
+    expect(location.hash).toBe("");
+  });
+
+  it("boots straight into settings when the hash is #settings", async () => {
+    authedBoot();
+    location.hash = "#settings";
+    const { container } = render(<App />);
+    await waitFor(() => expect(container.querySelector(".settings")).toBeTruthy());
+    expect(container.querySelector(".settings-toggle")?.className).toContain("active");
+  });
+
+  it("boots straight into trash when the hash is #trash", async () => {
+    authedBoot();
+    server.trash.push(...server.memos.splice(0, server.memos.length));
+    const t = server.seed({ title: "BootTrash", content: "# B" });
+    server.trash.push(...server.memos.splice(server.memos.indexOf(t), 1));
+    location.hash = "#trash";
+    const { container } = render(<App />);
+    await waitFor(() => expect(container.querySelectorAll(".side-tabs button")[1].className).toContain("active"));
+    await waitFor(() => expect(container.querySelector(".memo-list .restore")).toBeTruthy());
+  });
+
+  it("reacts to back/forward hashchange across settings, trash, memos and a memo", async () => {
+    authedBoot();
+    const row = server.seed({ title: "Hashed", content: "# Hashed\n\nbody" });
+    const { container } = render(<App />);
+    await waitFor(() => expect(container.querySelector(".side-tabs")).toBeTruthy());
+
+    const fireHash = async (h: string) => {
+      location.hash = h;
+      await act(async () => {
+        window.dispatchEvent(new HashChangeEvent("hashchange"));
+      });
+    };
+
+    // → settings
+    await fireHash("#settings");
+    await waitFor(() => expect(container.querySelector(".settings")).toBeTruthy());
+
+    // → trash
+    await fireHash("#trash");
+    await waitFor(() => expect(container.querySelectorAll(".side-tabs button")[1].className).toContain("active"));
+
+    // → a specific memo id opens that memo
+    await fireHash("#" + row.id);
+    await waitFor(() =>
+      expect((container.querySelector("textarea.editor") as HTMLTextAreaElement)?.value).toContain("Hashed")
+    );
+
+    // → empty hash returns to the memos view
+    await fireHash("");
+    await waitFor(() => expect(container.querySelector(".search")).toBeTruthy());
+  });
+});
+
+// ===========================================================================
 // DELETE + UNDO
 // ===========================================================================
 describe("delete and undo", () => {

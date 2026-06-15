@@ -44,6 +44,9 @@ export function usePreview(content: string) {
     const t = setTimeout(() => setSrc(content), PREVIEW_DEBOUNCE);
     return () => clearTimeout(t);
   }, [content]);
-  const html = useMemo(() => DOMPurify.sanitize(renderWithLines(src)), [src]);
+  const html = useMemo(
+    () => DOMPurify.sanitize(renderWithLines(src), { ADD_TAGS: ["input"], ADD_ATTR: ["type", "checked", "disabled"] }),
+    [src]
+  );
   return { html };
 }

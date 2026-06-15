@@ -8,16 +8,20 @@ import {
   verifyAuthenticationResponse,
 } from "@simplewebauthn/server";
 import type { AuthenticatorTransportFuture } from "@simplewebauthn/server";
+import type { Context } from "hono";
 
 type Bindings = {
   DB: D1Database;
-  AUTH_USER: string;
-  AUTH_PASS: string;
   JWT_SECRET: string;
   TURNSTILE_SECRET?: string; // bot protection — enforced only when set
   // history snapshot thresholds (ms); default to 1h. Overridden small in dev/e2e.
   HISTORY_GAP_MS?: string;
   HISTORY_SESSION_MS?: string;
+};
+
+type Variables = {
+  extUserId: number;
+  jwtPayload: Record<string, unknown>;
 };
 
 const COOKIE = "token";
@@ -45,7 +49,7 @@ async function hashToken(token: string): Promise<string> {
 }
 
 // --- login password hashing (PBKDF2-HMAC-SHA256) ------------------------
-// The login password is never stored plaintext: AUTH_PASS holds a salted
+// The login password is never stored plaintext: password_hash holds a salted
 // PBKDF2 hash in the form `pbkdf2:<iters>:<saltB64>:<hashB64>`. bcrypt/argon2
 // aren't available on the Workers runtime, so we use WebCrypto's PBKDF2. The
 // fields are `:`-delimited (not the PHC-conventional `$`) so the value survives
@@ -98,7 +102,7 @@ export async function hashPassword(password: string): Promise<string> {
   return `${PBKDF2_PREFIX}${PBKDF2_ITERS}:${b64encode(salt)}:${b64encode(hash)}`;
 }
 
-// Verify a login attempt against the configured AUTH_PASS, which must be a
+// Verify a login attempt against the stored password_hash, which must be a
 // pbkdf2: hash (mint it with scripts/hash-password.mjs). Anything else — incl.
 // a stale plaintext secret — fails closed.
 export async function verifyPassword(password: string, stored: string): Promise<boolean> {
@@ -116,18 +120,12 @@ export async function verifyPassword(password: string, stored: string): Promise<
   }
 }
 
-const app = new Hono<{ Bindings: Bindings }>();
+const app = new Hono<{ Bindings: Bindings; Variables: Variables }>();
 
 // --- user helper --------------------------------------------------------
-// Reads the authenticated user off the JWT payload the jwt() middleware sets.
-// uid/admin are populated by the multi-tenant login (issue #66); this reads
-// them defensively (defaulting to a non-admin uid 0) so it works regardless.
-function getUser(c: any): { uid: number; admin: boolean } {
-  const payload: Record<string, unknown> = c.get("jwtPayload") ?? {};
-  return {
-    uid: Number(payload.uid ?? 0),
-    admin: Boolean(payload.admin),
-  };
+function getUser(c: Context<{ Bindings: Bindings; Variables: Variables }>): { uid: number; username: string; admin: boolean } {
+  const p = c.get("jwtPayload");
+  return { uid: p.uid as number, username: p.sub as string, admin: !!p.admin };
 }
 
 // --- auth ---------------------------------------------------------------
@@ -161,12 +159,19 @@ app.post("/api/login", async (c) => {
     if (!ok) return c.json({ error: "verification failed" }, 403);
   }
 
-  if (username !== c.env.AUTH_USER || !(await verifyPassword(password, c.env.AUTH_PASS))) {
+  const user = await c.env.DB.prepare(
+    "SELECT id, password_hash, is_admin FROM users WHERE username = ?"
+  ).bind(username).first<{ id: number; password_hash: string; is_admin: number }>();
+
+  if (!user || !(await verifyPassword(password, user.password_hash))) {
     return c.json({ error: "invalid credentials" }, 401);
   }
 
+  await c.env.DB.prepare("UPDATE users SET last_login_at = ? WHERE id = ?")
+    .bind(Date.now(), user.id).run();
+
   const token = await sign(
-    { sub: username, exp: Math.floor(Date.now() / 1000) + MAX_AGE },
+    { sub: username, uid: user.id, admin: user.is_admin === 1, exp: Math.floor(Date.now() / 1000) + MAX_AGE },
     c.env.JWT_SECRET
   );
   setCookie(c, COOKIE, token, {
@@ -236,8 +241,8 @@ app.post("/api/passkey/auth/verify", async (c) => {
   // Look up the credential
   const credId = (body.response as { id?: string }).id ?? "";
   const cred = await c.env.DB.prepare(
-    "SELECT credential_id, public_key, counter, transports FROM webauthn_credentials WHERE credential_id = ?"
-  ).bind(credId).first<{ credential_id: string; public_key: string; counter: number; transports: string | null }>();
+    "SELECT credential_id, public_key, counter, transports, user_id FROM webauthn_credentials WHERE credential_id = ?"
+  ).bind(credId).first<{ credential_id: string; public_key: string; counter: number; transports: string | null; user_id: number }>();
   if (!cred) return c.json({ error: "credential not found" }, 401);
 
   const rpID = c.req.header("host")?.split(":")[0] ?? "localhost";
@@ -270,9 +275,15 @@ app.post("/api/passkey/auth/verify", async (c) => {
     "UPDATE webauthn_credentials SET counter = ? WHERE credential_id = ?"
   ).bind(verification.authenticationInfo.newCounter, cred.credential_id).run();
 
-  // Issue JWT (same as password login)
+  // Look up the user to get username and admin status
+  const userRow = await c.env.DB.prepare(
+    "SELECT id, username, is_admin FROM users WHERE id = ?"
+  ).bind(cred.user_id).first<{ id: number; username: string; is_admin: number }>();
+  if (!userRow) return c.json({ error: "user not found" }, 401);
+
+  // Issue JWT with full user payload
   const token = await sign(
-    { sub: c.env.AUTH_USER, exp: Math.floor(Date.now() / 1000) + MAX_AGE },
+    { sub: userRow.username, uid: userRow.id, admin: userRow.is_admin === 1, exp: Math.floor(Date.now() / 1000) + MAX_AGE },
     c.env.JWT_SECRET
   );
   setCookie(c, COOKIE, token, {
@@ -285,18 +296,24 @@ app.post("/api/passkey/auth/verify", async (c) => {
   return c.json({ ok: true });
 });
 
+// JWT gate specifically for passkey register routes (registered before the general /api/* gate)
+app.use("/api/passkey/register/*", (c, next) =>
+  jwt({ secret: c.env.JWT_SECRET, cookie: COOKIE, alg: "HS256" })(c, next)
+);
+
 // POST /api/passkey/register/options — JWT-protected (registered user only)
 app.post("/api/passkey/register/options", async (c) => {
   await cleanupChallenges(c.env.DB);
+  const { uid, username } = getUser(c);
   const { results: existing } = await c.env.DB.prepare(
-    "SELECT credential_id, transports FROM webauthn_credentials"
-  ).all<{ credential_id: string; transports: string | null }>();
+    "SELECT credential_id, transports FROM webauthn_credentials WHERE user_id = ?"
+  ).bind(uid).all<{ credential_id: string; transports: string | null }>();
 
   const options = await generateRegistrationOptions({
     rpName: "nemo",
     rpID: c.req.header("host")?.split(":")[0] ?? "localhost",
-    userName: c.env.AUTH_USER,
-    userDisplayName: c.env.AUTH_USER,
+    userName: username,
+    userDisplayName: username,
     excludeCredentials: existing.map((cr) => ({
       id: cr.credential_id,
       transports: cr.transports
@@ -320,6 +337,7 @@ app.post("/api/passkey/register/options", async (c) => {
 app.post("/api/passkey/register/verify", async (c) => {
   const body = await c.req.json<{ response: unknown; challenge: string }>();
   const { challenge } = body;
+  const { uid } = getUser(c);
 
   const row = await c.env.DB.prepare(
     "SELECT id, created_at FROM webauthn_challenges WHERE challenge = ?"
@@ -353,12 +371,13 @@ app.post("/api/passkey/register/verify", async (c) => {
     .replace(/\+/g, "-").replace(/\//g, "_").replace(/=/g, "");
 
   await c.env.DB.prepare(
-    "INSERT OR REPLACE INTO webauthn_credentials (credential_id, public_key, counter, transports, created_at) VALUES (?, ?, ?, ?, ?)"
+    "INSERT OR REPLACE INTO webauthn_credentials (credential_id, public_key, counter, transports, user_id, created_at) VALUES (?, ?, ?, ?, ?, ?)"
   ).bind(
     credential.id,
     publicKeyB64,
     credential.counter,
     credential.transports ? JSON.stringify(credential.transports) : null,
+    uid,
     Date.now()
   ).run();
 
@@ -378,15 +397,16 @@ app.use("/api/ext/*", async (c, next) => {
   const token = auth.startsWith("Bearer ") ? auth.slice(7) : "";
   if (!token) return c.json({ response: "unauthorized" }, 401);
   const row = await c.env.DB.prepare(
-    "SELECT id FROM api_tokens WHERE token_hash = ? AND revoked_at IS NULL"
+    "SELECT id, user_id FROM api_tokens WHERE token_hash = ? AND revoked_at IS NULL"
   )
     .bind(await hashToken(token))
-    .first<{ id: number }>();
+    .first<{ id: number; user_id: number }>();
   if (!row) return c.json({ response: "unauthorized" }, 401);
   // best-effort "last used" stamp for the settings list — never blocks the call
   await c.env.DB.prepare("UPDATE api_tokens SET last_used_at = ? WHERE id = ?")
     .bind(Date.now(), row.id)
     .run();
+  c.set("extUserId", row.user_id);
   return next();
 });
 
@@ -402,10 +422,11 @@ app.post("/api/ext/memos", async (c) => {
   }
   const finalContent = content.startsWith("# ") ? content : `# ${content}`;
   const now = Date.now();
+  const extUserId = c.get("extUserId");
   await c.env.DB.prepare(
-    "INSERT INTO memos (title, content, created_at, updated_at) VALUES (?, ?, ?, ?)"
+    "INSERT INTO memos (title, content, user_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?)"
   )
-    .bind(titleFrom(finalContent), finalContent, now, now)
+    .bind(titleFrom(finalContent), finalContent, extUserId, now, now)
     .run();
   return c.json({ response: "done" }, 201);
 });
@@ -432,7 +453,10 @@ app.use("/api/*", (c, next) => {
   return jwt({ secret: c.env.JWT_SECRET, cookie: COOKIE, alg: "HS256" })(c, next);
 });
 
-app.get("/api/me", (c) => c.json({ ok: true }));
+app.get("/api/me", (c) => {
+  const { uid, username, admin } = getUser(c);
+  return c.json({ ok: true, uid, username, admin });
+});
 
 // --- admin: user management (issue #66, multi-tenancy) -------------------
 // Gated to admins: the JWT must carry admin=true (set by the multi-tenant
@@ -490,30 +514,33 @@ app.patch("/api/admin/users/:id/password", async (c) => {
 // --- api token management (web app Settings page, JWT-gated) -------------
 // list active tokens (never the hash or plaintext — those are unrecoverable)
 app.get("/api/tokens", async (c) => {
+  const { uid } = getUser(c);
   const { results } = await c.env.DB.prepare(
-    "SELECT id, label, created_at, last_used_at FROM api_tokens WHERE revoked_at IS NULL ORDER BY created_at DESC"
-  ).all();
+    "SELECT id, label, created_at, last_used_at FROM api_tokens WHERE revoked_at IS NULL AND user_id = ? ORDER BY created_at DESC"
+  ).bind(uid).all();
   return c.json(results);
 });
 
 // mint a token — the plaintext is returned exactly once, here, and only the hash
 // is stored. The caller (Settings page) must surface it to the user immediately.
 app.post("/api/tokens", async (c) => {
+  const { uid } = getUser(c);
   const { label } = await c.req.json<{ label?: string }>().catch(() => ({ label: "" }));
   const token = newToken();
   const now = Date.now();
   const row = await c.env.DB.prepare(
-    "INSERT INTO api_tokens (label, token_hash, created_at) VALUES (?, ?, ?) RETURNING id, label, created_at, last_used_at"
+    "INSERT INTO api_tokens (label, token_hash, user_id, created_at) VALUES (?, ?, ?, ?) RETURNING id, label, created_at, last_used_at"
   )
-    .bind((label ?? "").toString().slice(0, 80), await hashToken(token), now)
+    .bind((label ?? "").toString().slice(0, 80), await hashToken(token), uid, now)
     .first();
   return c.json({ ...row, token }, 201);
 });
 
 // revoke (soft): the row stays for history, but the token stops authenticating
 app.delete("/api/tokens/:id", async (c) => {
-  await c.env.DB.prepare("UPDATE api_tokens SET revoked_at = ? WHERE id = ?")
-    .bind(Date.now(), c.req.param("id"))
+  const { uid } = getUser(c);
+  await c.env.DB.prepare("UPDATE api_tokens SET revoked_at = ? WHERE id = ? AND user_id = ?")
+    .bind(Date.now(), c.req.param("id"), uid)
     .run();
   return c.json({ ok: true });
 });
@@ -525,9 +552,10 @@ function titleFrom(content: string): string {
 }
 
 app.get("/api/memos", async (c) => {
+  const { uid } = getUser(c);
   const { results } = await c.env.DB.prepare(
-    "SELECT id, title, updated_at FROM memos WHERE deleted_at IS NULL ORDER BY updated_at DESC"
-  ).all();
+    "SELECT id, title, updated_at FROM memos WHERE deleted_at IS NULL AND user_id = ? ORDER BY updated_at DESC"
+  ).bind(uid).all();
   return c.json(results);
 });
 
@@ -535,33 +563,36 @@ app.get("/api/memos", async (c) => {
 // titles, so body matching has to happen server-side). Returns the same light
 // MemoMeta shape as the list. Empty query → empty result (no match-all).
 app.get("/api/search", async (c) => {
+  const { uid } = getUser(c);
   const q = (c.req.query("q") ?? "").trim();
   if (!q) return c.json([]);
   // escape LIKE wildcards so "%" / "_" in the query match literally, not as patterns
   const like = `%${q.replace(/[\\%_]/g, "\\$&")}%`;
   const { results } = await c.env.DB.prepare(
-    "SELECT id, title, updated_at FROM memos WHERE deleted_at IS NULL AND (title LIKE ? ESCAPE '\\' OR content LIKE ? ESCAPE '\\') ORDER BY updated_at DESC"
+    "SELECT id, title, updated_at FROM memos WHERE deleted_at IS NULL AND user_id = ? AND (title LIKE ? ESCAPE '\\' OR content LIKE ? ESCAPE '\\') ORDER BY updated_at DESC"
   )
-    .bind(like, like)
+    .bind(uid, like, like)
     .all();
   return c.json(results);
 });
 
 app.post("/api/memos", async (c) => {
+  const { uid } = getUser(c);
   const now = Date.now();
   const row = await c.env.DB.prepare(
-    "INSERT INTO memos (title, content, created_at, updated_at) VALUES ('Untitled', '', ?, ?) RETURNING *"
+    "INSERT INTO memos (title, content, user_id, created_at, updated_at) VALUES ('Untitled', '', ?, ?, ?) RETURNING *"
   )
-    .bind(now, now)
+    .bind(uid, now, now)
     .first();
   return c.json(row);
 });
 
 app.get("/api/trash", async (c) => {
+  const { uid } = getUser(c);
   // hidden memos stay in the DB but are excluded from the trash listing
   const { results } = await c.env.DB.prepare(
-    "SELECT id, title, updated_at FROM memos WHERE deleted_at IS NOT NULL AND hidden_at IS NULL ORDER BY deleted_at DESC"
-  ).all();
+    "SELECT id, title, updated_at FROM memos WHERE deleted_at IS NOT NULL AND hidden_at IS NULL AND user_id = ? ORDER BY deleted_at DESC"
+  ).bind(uid).all();
   return c.json(results);
 });
 
@@ -569,18 +600,20 @@ app.get("/api/trash", async (c) => {
 // document. Separate from GET /api/memos/:id (which 404s on trashed rows, a
 // contract the multi-session "deleted elsewhere" detection relies on).
 app.get("/api/trash/:id", async (c) => {
+  const { uid } = getUser(c);
   const row = await c.env.DB.prepare(
-    "SELECT * FROM memos WHERE id = ? AND deleted_at IS NOT NULL AND hidden_at IS NULL"
+    "SELECT * FROM memos WHERE id = ? AND deleted_at IS NOT NULL AND hidden_at IS NULL AND user_id = ?"
   )
-    .bind(c.req.param("id"))
+    .bind(c.req.param("id"), uid)
     .first();
   if (!row) return c.json({ error: "not found" }, 404);
   return c.json(row);
 });
 
 app.post("/api/memos/:id/restore", async (c) => {
-  await c.env.DB.prepare("UPDATE memos SET deleted_at = NULL, hidden_at = NULL WHERE id = ?")
-    .bind(c.req.param("id"))
+  const { uid } = getUser(c);
+  await c.env.DB.prepare("UPDATE memos SET deleted_at = NULL, hidden_at = NULL WHERE id = ? AND user_id = ?")
+    .bind(c.req.param("id"), uid)
     .run();
   return c.json({ ok: true });
 });
@@ -588,31 +621,34 @@ app.post("/api/memos/:id/restore", async (c) => {
 // hide a trashed memo from the trash view without deleting it — the row stays
 // in the DB, just flagged so it no longer shows up anywhere in the UI
 app.post("/api/memos/:id/hide", async (c) => {
-  await c.env.DB.prepare("UPDATE memos SET hidden_at = ? WHERE id = ?")
-    .bind(Date.now(), c.req.param("id"))
+  const { uid } = getUser(c);
+  await c.env.DB.prepare("UPDATE memos SET hidden_at = ? WHERE id = ? AND user_id = ?")
+    .bind(Date.now(), c.req.param("id"), uid)
     .run();
   return c.json({ ok: true });
 });
 
 app.get("/api/memos/:id", async (c) => {
+  const { uid } = getUser(c);
   const row = await c.env.DB.prepare(
-    "SELECT * FROM memos WHERE id = ? AND deleted_at IS NULL"
+    "SELECT * FROM memos WHERE id = ? AND deleted_at IS NULL AND user_id = ?"
   )
-    .bind(c.req.param("id"))
+    .bind(c.req.param("id"), uid)
     .first();
   if (!row) return c.json({ error: "not found" }, 404);
   return c.json(row);
 });
 
 app.put("/api/memos/:id", async (c) => {
+  const { uid } = getUser(c);
   const { content, base } = await c.req.json<{ content: string; base?: number | null }>();
   const id = c.req.param("id");
 
   // current server state — drives both the conflict check and history snapshots
   const prev = await c.env.DB.prepare(
-    "SELECT updated_at, created_at, content, title FROM memos WHERE id = ? AND deleted_at IS NULL"
+    "SELECT updated_at, created_at, content, title FROM memos WHERE id = ? AND deleted_at IS NULL AND user_id = ?"
   )
-    .bind(id)
+    .bind(id, uid)
     .first<{ updated_at: number; created_at: number; content: string; title: string }>();
 
   // optimistic concurrency: if the row was updated elsewhere since `base`,
@@ -651,9 +687,9 @@ app.put("/api/memos/:id", async (c) => {
 
   const title = titleFrom(content);
   await c.env.DB.prepare(
-    "UPDATE memos SET title = ?, content = ?, updated_at = ? WHERE id = ?"
+    "UPDATE memos SET title = ?, content = ?, updated_at = ? WHERE id = ? AND user_id = ?"
   )
-    .bind(title, content, now, id)
+    .bind(title, content, now, id, uid)
     .run();
   return c.json({ ok: true, title, updated_at: now });
 });
@@ -661,6 +697,12 @@ app.put("/api/memos/:id", async (c) => {
 // history: list a memo's preserved past states, newest first (no content — the
 // list stays light; fetch a single version's content via :versionId)
 app.get("/api/memos/:id/versions", async (c) => {
+  const { uid } = getUser(c);
+  // Only list versions for memos owned by this user
+  const memo = await c.env.DB.prepare(
+    "SELECT id FROM memos WHERE id = ? AND user_id = ?"
+  ).bind(c.req.param("id"), uid).first();
+  if (!memo) return c.json([]);
   const { results } = await c.env.DB.prepare(
     "SELECT id, title, created_at FROM memo_versions WHERE memo_id = ? ORDER BY created_at DESC"
   )
@@ -670,6 +712,12 @@ app.get("/api/memos/:id/versions", async (c) => {
 });
 
 app.get("/api/memos/:id/versions/:versionId", async (c) => {
+  const { uid } = getUser(c);
+  // Check memo ownership
+  const memo = await c.env.DB.prepare(
+    "SELECT id FROM memos WHERE id = ? AND user_id = ?"
+  ).bind(c.req.param("id"), uid).first();
+  if (!memo) return c.json({ error: "not found" }, 404);
   const row = await c.env.DB.prepare(
     "SELECT id, memo_id, title, content, created_at FROM memo_versions WHERE id = ? AND memo_id = ?"
   )
@@ -680,15 +728,16 @@ app.get("/api/memos/:id/versions/:versionId", async (c) => {
 });
 
 app.delete("/api/memos/:id", async (c) => {
+  const { uid } = getUser(c);
   const id = c.req.param("id");
   if (c.req.query("purge") === "1") {
     // hard delete — used to clean up never-used empty memos; drop its history too
-    await c.env.DB.prepare("DELETE FROM memos WHERE id = ?").bind(id).run();
+    await c.env.DB.prepare("DELETE FROM memos WHERE id = ? AND user_id = ?").bind(id, uid).run();
     await c.env.DB.prepare("DELETE FROM memo_versions WHERE memo_id = ?").bind(id).run();
   } else {
     // soft delete: mark deleted, keep the row
-    await c.env.DB.prepare("UPDATE memos SET deleted_at = ? WHERE id = ?")
-      .bind(Date.now(), id)
+    await c.env.DB.prepare("UPDATE memos SET deleted_at = ? WHERE id = ? AND user_id = ?")
+      .bind(Date.now(), id, uid)
       .run();
   }
   return c.json({ ok: true });

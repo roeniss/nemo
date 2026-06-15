@@ -5,10 +5,19 @@ import { D1 } from "./d1";
 const PW_HASH = await hashPassword("pw");
 
 const SCHEMA = `
+CREATE TABLE users (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  username TEXT NOT NULL UNIQUE,
+  password_hash TEXT NOT NULL,
+  is_admin INTEGER NOT NULL DEFAULT 0,
+  created_at INTEGER NOT NULL,
+  last_login_at INTEGER
+);
 CREATE TABLE memos (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   title TEXT NOT NULL DEFAULT 'Untitled',
   content TEXT NOT NULL DEFAULT '',
+  user_id INTEGER NOT NULL,
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL,
   deleted_at INTEGER,
@@ -20,6 +29,7 @@ CREATE TABLE webauthn_credentials (
   public_key TEXT NOT NULL,
   counter INTEGER NOT NULL DEFAULT 0,
   transports TEXT,
+  user_id INTEGER NOT NULL,
   created_at INTEGER NOT NULL
 );
 CREATE TABLE webauthn_challenges (
@@ -32,10 +42,14 @@ CREATE TABLE webauthn_challenges (
 let env: Record<string, unknown>;
 let db: D1;
 
-beforeEach(() => {
+beforeEach(async () => {
   db = new D1();
   db.exec(SCHEMA);
-  env = { DB: db, AUTH_USER: "tester", AUTH_PASS: PW_HASH, JWT_SECRET: "test-secret" };
+  env = { DB: db, JWT_SECRET: "test-secret" };
+  // Seed a user
+  await db.prepare(
+    "INSERT INTO users (id, username, password_hash, is_admin, created_at) VALUES (1, ?, ?, 1, ?)"
+  ).bind("tester", PW_HASH, Date.now()).run();
 });
 
 const req = (path: string, init?: RequestInit) => app.request(path, init, env as never);
@@ -117,8 +131,8 @@ describe("POST /api/passkey/auth/options", () => {
 
   it("includes existing credentials in allowCredentials", async () => {
     db.exec(
-      `INSERT INTO webauthn_credentials (credential_id, public_key, counter, transports, created_at)
-       VALUES ('cred-abc', 'pubkey', 0, '["internal"]', ${Date.now()})`
+      `INSERT INTO webauthn_credentials (credential_id, public_key, counter, transports, user_id, created_at)
+       VALUES ('cred-abc', 'pubkey', 0, '["internal"]', 1, ${Date.now()})`
     );
     const r = await req("/api/passkey/auth/options", {
       method: "POST",
@@ -130,8 +144,8 @@ describe("POST /api/passkey/auth/options", () => {
 
   it("maps credential with null transports to undefined in allowCredentials", async () => {
     db.exec(
-      `INSERT INTO webauthn_credentials (credential_id, public_key, counter, transports, created_at)
-       VALUES ('cred-no-transport', 'pubkey', 0, NULL, ${Date.now()})`
+      `INSERT INTO webauthn_credentials (credential_id, public_key, counter, transports, user_id, created_at)
+       VALUES ('cred-no-transport', 'pubkey', 0, NULL, 1, ${Date.now()})`
     );
     const r = await req("/api/passkey/auth/options", {
       method: "POST",
@@ -151,8 +165,8 @@ describe("POST /api/passkey/auth/verify", () => {
   async function insertCredential(credId = "cred-abc", transports: string | null = '["internal"]') {
     const transportVal = transports === null ? "NULL" : `'${transports}'`;
     db.exec(
-      `INSERT INTO webauthn_credentials (credential_id, public_key, counter, transports, created_at)
-       VALUES ('${credId}', 'AQID', 0, ${transportVal}, ${Date.now()})`
+      `INSERT INTO webauthn_credentials (credential_id, public_key, counter, transports, user_id, created_at)
+       VALUES ('${credId}', 'AQID', 0, ${transportVal}, 1, ${Date.now()})`
     );
   }
 
@@ -279,8 +293,8 @@ describe("POST /api/passkey/register/options (JWT-protected)", () => {
   it("maps existing credential with null transports to undefined in excludeCredentials", async () => {
     // Insert a credential with NULL transports to hit the ternary false-branch on line ~290
     db.exec(
-      `INSERT INTO webauthn_credentials (credential_id, public_key, counter, transports, created_at)
-       VALUES ('cred-null-transport', 'pubkey', 0, NULL, ${Date.now()})`
+      `INSERT INTO webauthn_credentials (credential_id, public_key, counter, transports, user_id, created_at)
+       VALUES ('cred-null-transport', 'pubkey', 0, NULL, 1, ${Date.now()})`
     );
     const h = await authedHeaders();
     const r = await req("/api/passkey/register/options", { method: "POST", headers: h });
@@ -290,8 +304,8 @@ describe("POST /api/passkey/register/options (JWT-protected)", () => {
   it("maps existing credential with transports to parsed array in excludeCredentials", async () => {
     // Insert a credential with transports to hit the ternary true-branch on line ~290
     db.exec(
-      `INSERT INTO webauthn_credentials (credential_id, public_key, counter, transports, created_at)
-       VALUES ('cred-with-transport', 'pubkey', 0, '["internal"]', ${Date.now()})`
+      `INSERT INTO webauthn_credentials (credential_id, public_key, counter, transports, user_id, created_at)
+       VALUES ('cred-with-transport', 'pubkey', 0, '["internal"]', 1, ${Date.now()})`
     );
     const h = await authedHeaders();
     const r = await req("/api/passkey/register/options", { method: "POST", headers: h });

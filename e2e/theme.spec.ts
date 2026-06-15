@@ -12,29 +12,29 @@ test.describe("dark mode", () => {
     // default (no stored choice) → follow system; light OS pref resolves to light
     await expect(page.locator(root)).not.toHaveAttribute("data-theme", "dark");
     const toggle = page.locator(sel.themeToggle);
-    await expect(toggle).toHaveText("🖥️");
+    await expect(toggle).toHaveAttribute("aria-label", "System theme");
 
     // system → light
     await toggle.click();
     await expect(page.locator(root)).not.toHaveAttribute("data-theme", "dark");
-    await expect(toggle).toHaveText("☀️");
+    await expect(toggle).toHaveAttribute("aria-label", "Light mode");
     expect(await page.evaluate(() => localStorage.getItem("qm-theme"))).toBe("light");
 
     // light → dark
     await toggle.click();
     await expect(page.locator(root)).toHaveAttribute("data-theme", "dark");
-    await expect(toggle).toHaveText("🌙");
+    await expect(toggle).toHaveAttribute("aria-label", "Dark mode");
     expect(await page.evaluate(() => localStorage.getItem("qm-theme"))).toBe("dark");
 
     // the choice survives a reload, with no flash of the wrong theme
     await page.reload();
     await expect(page.locator(root)).toHaveAttribute("data-theme", "dark");
-    await expect(page.locator(sel.themeToggle)).toHaveText("🌙");
+    await expect(page.locator(sel.themeToggle)).toHaveAttribute("aria-label", "Dark mode");
 
     // dark → system (light OS pref → light)
     await page.locator(sel.themeToggle).click();
     await expect(page.locator(root)).not.toHaveAttribute("data-theme", "dark");
-    await expect(page.locator(sel.themeToggle)).toHaveText("🖥️");
+    await expect(page.locator(sel.themeToggle)).toHaveAttribute("aria-label", "System theme");
     expect(await page.evaluate(() => localStorage.getItem("qm-theme"))).toBe("system");
   });
 

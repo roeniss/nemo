@@ -56,6 +56,7 @@ CREATE TABLE IF NOT EXISTS webauthn_credentials (
   public_key TEXT NOT NULL,           -- base64url-encoded COSE public key
   counter INTEGER NOT NULL DEFAULT 0,
   transports TEXT,                    -- JSON array of transport hints
+  aaguid TEXT,                        -- authenticator make/model id (for friendly names)
   user_id INTEGER NOT NULL,           -- owning user
   created_at INTEGER NOT NULL
 );

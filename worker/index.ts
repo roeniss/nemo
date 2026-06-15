@@ -21,7 +21,7 @@ type Bindings = {
 };
 
 const COOKIE = "token";
-const MAX_AGE = 60 * 60 * 24 * 30; // 30d
+const MAX_AGE = 60 * 60 * 24 * 7; // 7d
 const HOUR = 60 * 60 * 1000;
 
 // idle gap that ends an editing session, and the max a session can run before we

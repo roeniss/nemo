@@ -112,11 +112,6 @@ export function Settings({ flash }: { flash: (msg: string) => void }) {
         </div>
       )}
 
-      <h2>Passkeys</h2>
-      <p className="muted">Register a passkey (fingerprint, Face ID, or hardware key) as an additional login option.</p>
-      <button onClick={registerPasskey}>Passkey 등록</button>
-      {passkeyMsg && <p className="muted">{passkeyMsg}</p>}
-
       <ul className="token-list">
         {tokens.map((t) => (
           <li key={t.id}>
@@ -131,6 +126,11 @@ export function Settings({ flash }: { flash: (msg: string) => void }) {
           <li className="empty">{loading ? "Loading…" : "No tokens yet"}</li>
         )}
       </ul>
+
+      <h2>Passkeys</h2>
+      <p className="muted">Register a passkey (fingerprint, Face ID, or hardware key) as an additional login option.</p>
+      <button onClick={registerPasskey}>Passkey 등록</button>
+      {passkeyMsg && <p className="muted">{passkeyMsg}</p>}
     </div>
   );
 }

@@ -261,6 +261,16 @@ input {
 .topbar .new-memo {
   font-weight: 600;
 }
+.github-link {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 6px;
+  color: var(--fg-muted);
+  text-decoration: none;
+}
+.github-link:hover {
+  color: var(--fg);
+}
 .topbar .download:disabled {
   opacity: 0.4;
   cursor: default;

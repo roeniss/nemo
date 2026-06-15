@@ -10,6 +10,9 @@ export const CONTENT_CACHE = "qm-cache-"; // last-seen server content per memo (
 export const TEMPS_KEY = "qm-temps"; // local-only memos not yet pushed to the server (localStorage)
 export const LIST_CACHE = "qm-memos"; // cached server list for offline viewing (localStorage)
 
+// the repo's pull-requests page — the GitHub icon in the top bar links straight here
+export const GITHUB_PULLS_URL = "https://github.com/roeniss/nemo/pulls";
+
 export const NEW_DOC = "# "; // every new memo opens with the title heading ready to type
 export const PREVIEW_DEBOUNCE = 200; // recompute the rendered preview this long after a keystroke
 export const SAVE_DEBOUNCE = 300; // save this long after the last keystroke (idle)

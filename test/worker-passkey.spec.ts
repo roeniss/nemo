@@ -127,6 +127,18 @@ describe("POST /api/passkey/auth/options", () => {
     expect(r.status).toBe(200);
     // generateAuthenticationOptions was called — this just verifies the endpoint runs OK
   });
+
+  it("maps credential with null transports to undefined in allowCredentials", async () => {
+    db.exec(
+      `INSERT INTO webauthn_credentials (credential_id, public_key, counter, transports, created_at)
+       VALUES ('cred-no-transport', 'pubkey', 0, NULL, ${Date.now()})`
+    );
+    const r = await req("/api/passkey/auth/options", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+    });
+    expect(r.status).toBe(200);
+  });
 });
 
 describe("POST /api/passkey/auth/verify", () => {
@@ -136,10 +148,11 @@ describe("POST /api/passkey/auth/verify", () => {
     );
   }
 
-  async function insertCredential(credId = "cred-abc") {
+  async function insertCredential(credId = "cred-abc", transports: string | null = '["internal"]') {
+    const transportVal = transports === null ? "NULL" : `'${transports}'`;
     db.exec(
       `INSERT INTO webauthn_credentials (credential_id, public_key, counter, transports, created_at)
-       VALUES ('${credId}', 'AQID', 0, '["internal"]', ${Date.now()})`
+       VALUES ('${credId}', 'AQID', 0, ${transportVal}, ${Date.now()})`
     );
   }
 
@@ -175,6 +188,17 @@ describe("POST /api/passkey/auth/verify", () => {
     expect((await r.json() as any).error).toMatch(/credential not found/);
   });
 
+  it("returns 401 when response has no id (falls back to empty string)", async () => {
+    await insertChallenge("no-id-challenge");
+    const r = await req("/api/passkey/auth/verify", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ response: {}, challenge: "no-id-challenge" }),
+    });
+    expect(r.status).toBe(401);
+    expect((await r.json() as any).error).toMatch(/credential not found/);
+  });
+
   it("issues a JWT cookie on successful verification", async () => {
     await insertChallenge("valid-challenge");
     await insertCredential("cred-abc");
@@ -186,6 +210,51 @@ describe("POST /api/passkey/auth/verify", () => {
     expect(r.status).toBe(200);
     expect((await r.json() as any).ok).toBe(true);
     expect(r.headers.get("set-cookie")).toContain("token=");
+  });
+
+  it("succeeds when credential has null transports (maps to undefined)", async () => {
+    await insertChallenge("null-transport-challenge");
+    await insertCredential("cred-null", null);
+    const r = await req("/api/passkey/auth/verify", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ response: { id: "cred-null" }, challenge: "null-transport-challenge" }),
+    });
+    expect(r.status).toBe(200);
+    expect((await r.json() as any).ok).toBe(true);
+  });
+
+  it("returns 401 when verifyAuthenticationResponse throws", async () => {
+    const { verifyAuthenticationResponse } = await import("@simplewebauthn/server");
+    vi.mocked(verifyAuthenticationResponse).mockRejectedValueOnce(new Error("bad sig"));
+
+    await insertChallenge("throw-challenge");
+    await insertCredential("cred-abc");
+    const r = await req("/api/passkey/auth/verify", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ response: { id: "cred-abc" }, challenge: "throw-challenge" }),
+    });
+    expect(r.status).toBe(401);
+    expect((await r.json() as any).error).toMatch(/verification failed/);
+  });
+
+  it("returns 401 when verified is false", async () => {
+    const { verifyAuthenticationResponse } = await import("@simplewebauthn/server");
+    vi.mocked(verifyAuthenticationResponse).mockResolvedValueOnce({
+      verified: false,
+      authenticationInfo: undefined as any,
+    });
+
+    await insertChallenge("unverified-auth-challenge");
+    await insertCredential("cred-abc");
+    const r = await req("/api/passkey/auth/verify", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ response: { id: "cred-abc" }, challenge: "unverified-auth-challenge" }),
+    });
+    expect(r.status).toBe(401);
+    expect((await r.json() as any).error).toMatch(/verification failed/);
   });
 });
 
@@ -205,6 +274,28 @@ describe("POST /api/passkey/register/options (JWT-protected)", () => {
       .bind("mock-reg-challenge")
       .first<{ challenge: string }>();
     expect(row?.challenge).toBe("mock-reg-challenge");
+  });
+
+  it("maps existing credential with null transports to undefined in excludeCredentials", async () => {
+    // Insert a credential with NULL transports to hit the ternary false-branch on line ~290
+    db.exec(
+      `INSERT INTO webauthn_credentials (credential_id, public_key, counter, transports, created_at)
+       VALUES ('cred-null-transport', 'pubkey', 0, NULL, ${Date.now()})`
+    );
+    const h = await authedHeaders();
+    const r = await req("/api/passkey/register/options", { method: "POST", headers: h });
+    expect(r.status).toBe(200);
+  });
+
+  it("maps existing credential with transports to parsed array in excludeCredentials", async () => {
+    // Insert a credential with transports to hit the ternary true-branch on line ~290
+    db.exec(
+      `INSERT INTO webauthn_credentials (credential_id, public_key, counter, transports, created_at)
+       VALUES ('cred-with-transport', 'pubkey', 0, '["internal"]', ${Date.now()})`
+    );
+    const h = await authedHeaders();
+    const r = await req("/api/passkey/register/options", { method: "POST", headers: h });
+    expect(r.status).toBe(200);
   });
 });
 
@@ -270,6 +361,31 @@ describe("POST /api/passkey/register/verify (JWT-protected)", () => {
     });
     expect(r.status).toBe(400);
     expect((await r.json() as any).error).toMatch(/verification failed/);
+  });
+
+  it("saves credential with null transports when credential has no transports", async () => {
+    const { verifyRegistrationResponse } = await import("@simplewebauthn/server");
+    vi.mocked(verifyRegistrationResponse).mockResolvedValueOnce({
+      verified: true,
+      registrationInfo: {
+        credential: {
+          id: "mock-cred-no-transport",
+          publicKey: new Uint8Array([1, 2, 3]),
+          counter: 0,
+          // no transports field → undefined → stores null
+        },
+      },
+    } as any);
+
+    await insertChallenge("no-transport-reg-challenge");
+    const h = await authedHeaders();
+    const r = await req("/api/passkey/register/verify", {
+      method: "POST",
+      headers: h,
+      body: JSON.stringify({ response: {}, challenge: "no-transport-reg-challenge" }),
+    });
+    expect(r.status).toBe(200);
+    expect((await r.json() as any).ok).toBe(true);
   });
 
   it("returns 400 when verification.verified is false", async () => {

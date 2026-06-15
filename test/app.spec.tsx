@@ -295,6 +295,22 @@ describe("Login", () => {
       expect(container.querySelector(".err")?.textContent).toContain("Verification failed")
     );
   });
+
+  it("shows error message when passkey login fails", async () => {
+    server.opts.meStatus = 401;
+    const { container } = render(<App />);
+    await waitFor(() => expect(container.querySelector(".login")).toBeTruthy());
+    // The passkey endpoint is not handled by the test server → 404 → throws
+    const passkeyBtn = Array.from(container.querySelectorAll("button")).find(
+      (b) => b.textContent?.includes("Passkey")
+    )!;
+    await act(async () => {
+      fireEvent.click(passkeyBtn);
+    });
+    await waitFor(() =>
+      expect(container.querySelector(".err")?.textContent).toContain("Passkey login failed")
+    );
+  });
 });
 
 // ===========================================================================
@@ -3087,6 +3103,56 @@ describe("checkbox auto-continue on Enter", () => {
       fireEvent.keyDown(ta, { key: "Enter" });
     });
     expect(ta.value).not.toContain("- [ ]");
+  });
+});
+
+// ===========================================================================
+// CHECKBOX RAF CURSOR POSITIONING (with synchronous rAF mock)
+// ===========================================================================
+describe("checkbox rAF cursor positioning", () => {
+  let rafSpy: ReturnType<typeof vi.spyOn>;
+  beforeEach(() => {
+    rafSpy = vi.spyOn(window, "requestAnimationFrame").mockImplementation((cb) => {
+      cb(0);
+      return 0;
+    });
+  });
+  afterEach(() => {
+    rafSpy.mockRestore();
+  });
+
+  async function openEditorWithContent(content: string) {
+    authedBoot();
+    const row = server.seed({ content, title: "test" });
+    location.hash = "#" + row.id;
+    const { container } = render(<App />);
+    await waitFor(() =>
+      expect((container.querySelector("textarea.editor") as HTMLTextAreaElement)?.value).toBe(content)
+    );
+    const ta = container.querySelector("textarea.editor") as HTMLTextAreaElement;
+    return { container, ta, row };
+  }
+
+  it("sets cursor after collapsing empty checkbox line (rAF callback runs)", async () => {
+    const { ta } = await openEditorWithContent("- [ ] item one\n- [ ] ");
+    await act(async () => {
+      ta.selectionStart = ta.selectionEnd = ta.value.length;
+      fireEvent.keyDown(ta, { key: "Enter" });
+    });
+    await waitFor(() => expect(ta.value).toBe("- [ ] item one\n\n"));
+    // With synchronous rAF, the setSelectionRange inside the callback is reached
+    expect(ta.selectionStart).toBe("- [ ] item one\n".length + 1);
+  });
+
+  it("sets cursor after inserting new checkbox (rAF callback runs)", async () => {
+    const { ta } = await openEditorWithContent("- [ ] item one");
+    await act(async () => {
+      ta.selectionStart = ta.selectionEnd = ta.value.length;
+      fireEvent.keyDown(ta, { key: "Enter" });
+    });
+    await waitFor(() => expect(ta.value).toBe("- [ ] item one\n- [ ] "));
+    // Cursor should be at end of inserted new checkbox
+    expect(ta.selectionStart).toBe("- [ ] item one\n- [ ] ".length);
   });
 });
 

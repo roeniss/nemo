@@ -3,6 +3,11 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, fireEvent, waitFor, cleanup } from "@testing-library/preact";
 import { Settings } from "../src/Settings";
 
+vi.mock("@simplewebauthn/browser", () => ({
+  startRegistration: vi.fn(),
+}));
+import { startRegistration } from "@simplewebauthn/browser";
+
 function json(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), {
     status,
@@ -146,5 +151,107 @@ describe("Settings — generate / copy / revoke", () => {
     await waitFor(() => expect(container.textContent).toContain("temp"));
     fireEvent.click(container.querySelector(".token-list .del")!);
     await waitFor(() => expect(container.textContent).toContain("No tokens yet"));
+  });
+});
+
+describe("Settings — passkey registration", () => {
+  const fakeOptions = {
+    challenge: "test-challenge-abc",
+    rp: { name: "nemo", id: "localhost" },
+    user: { id: "dXNlcg==", name: "tester", displayName: "tester" },
+    pubKeyCredParams: [],
+    timeout: 60000,
+    excludeCredentials: [],
+    authenticatorSelection: {},
+    attestation: "none",
+  };
+  const fakeRegResp = { id: "cred-id", rawId: "cred-id", type: "public-key", response: {} };
+
+  beforeEach(() => {
+    handler = () => json([]);
+    vi.mocked(startRegistration).mockResolvedValue(fakeRegResp as any);
+  });
+
+  it("shows 'Passkey registered successfully' on success", async () => {
+    handler = (path, method) => {
+      if (path === "/tokens" && method === "GET") return json([]);
+      if (path === "/passkey/register/options" && method === "POST") return json(fakeOptions);
+      if (path === "/passkey/register/verify" && method === "POST") return json({ ok: true });
+      return json({}, 404);
+    };
+
+    const { container } = render(<Settings flash={vi.fn()} />);
+    await waitFor(() => expect(container.textContent).toContain("Passkey 등록"));
+
+    const btn = Array.from(container.querySelectorAll("button")).find(
+      (b) => b.textContent === "Passkey 등록"
+    )!;
+    fireEvent.click(btn);
+
+    await waitFor(() =>
+      expect(container.textContent).toContain("Passkey registered successfully.")
+    );
+    expect(startRegistration).toHaveBeenCalledWith({ optionsJSON: fakeOptions });
+  });
+
+  it("shows failure message when options fetch fails", async () => {
+    handler = (path, method) => {
+      if (path === "/tokens" && method === "GET") return json([]);
+      if (path === "/passkey/register/options" && method === "POST")
+        return new Response("", { status: 500 });
+      return json({}, 404);
+    };
+
+    const { container } = render(<Settings flash={vi.fn()} />);
+    await waitFor(() => expect(container.textContent).toContain("Passkey 등록"));
+    const btn = Array.from(container.querySelectorAll("button")).find(
+      (b) => b.textContent === "Passkey 등록"
+    )!;
+    fireEvent.click(btn);
+
+    await waitFor(() =>
+      expect(container.textContent).toContain("Failed to get registration options.")
+    );
+  });
+
+  it("shows failure message when verify fails", async () => {
+    handler = (path, method) => {
+      if (path === "/tokens" && method === "GET") return json([]);
+      if (path === "/passkey/register/options" && method === "POST") return json(fakeOptions);
+      if (path === "/passkey/register/verify" && method === "POST")
+        return new Response("", { status: 400 });
+      return json({}, 404);
+    };
+
+    const { container } = render(<Settings flash={vi.fn()} />);
+    await waitFor(() => expect(container.textContent).toContain("Passkey 등록"));
+    const btn = Array.from(container.querySelectorAll("button")).find(
+      (b) => b.textContent === "Passkey 등록"
+    )!;
+    fireEvent.click(btn);
+
+    await waitFor(() =>
+      expect(container.textContent).toContain("Passkey registration failed.")
+    );
+  });
+
+  it("shows cancelled message when startRegistration throws", async () => {
+    vi.mocked(startRegistration).mockRejectedValue(new Error("user cancelled"));
+    handler = (path, method) => {
+      if (path === "/tokens" && method === "GET") return json([]);
+      if (path === "/passkey/register/options" && method === "POST") return json(fakeOptions);
+      return json({}, 404);
+    };
+
+    const { container } = render(<Settings flash={vi.fn()} />);
+    await waitFor(() => expect(container.textContent).toContain("Passkey 등록"));
+    const btn = Array.from(container.querySelectorAll("button")).find(
+      (b) => b.textContent === "Passkey 등록"
+    )!;
+    fireEvent.click(btn);
+
+    await waitFor(() =>
+      expect(container.textContent).toContain("Passkey registration was cancelled or failed.")
+    );
   });
 });

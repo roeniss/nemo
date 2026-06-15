@@ -34,3 +34,22 @@ CREATE TABLE IF NOT EXISTS api_tokens (
 );
 
 CREATE INDEX IF NOT EXISTS idx_api_tokens_hash ON api_tokens (token_hash);
+
+-- WebAuthn / passkey credentials. One row per registered authenticator.
+CREATE TABLE IF NOT EXISTS webauthn_credentials (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  credential_id TEXT NOT NULL UNIQUE, -- base64url-encoded credential ID
+  public_key TEXT NOT NULL,           -- base64url-encoded COSE public key
+  counter INTEGER NOT NULL DEFAULT 0,
+  transports TEXT,                    -- JSON array of transport hints
+  created_at INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_webauthn_credentials_id ON webauthn_credentials (credential_id);
+
+-- Temporary challenge storage for WebAuthn ceremonies (5-min TTL, cleaned up lazily).
+CREATE TABLE IF NOT EXISTS webauthn_challenges (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  challenge TEXT NOT NULL UNIQUE,
+  created_at INTEGER NOT NULL
+);

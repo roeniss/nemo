@@ -1,4 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { startAuthentication, startRegistration } from "@simplewebauthn/browser";
+import type { PublicKeyCredentialRequestOptionsJSON, PublicKeyCredentialCreationOptionsJSON } from "@simplewebauthn/browser";
 import { kv, hydrate } from "./idb";
 import {
   type MemoMeta,
@@ -240,6 +242,16 @@ export default function App() {
     }
   }, [currentId]);
 
+  // shared post-login setup (used by both password login and passkey login)
+  async function afterLogin() {
+    localStorage.setItem("qm-authed", "1");
+    setAuthed(true);
+    const list = (await (await api("/memos")).json()) as MemoMeta[];
+    setMemos(list);
+    setLoading(false);
+    newMemo(); // land in a fresh document, ready to write
+  }
+
   async function login(
     username: string,
     password: string,
@@ -250,13 +262,21 @@ export default function App() {
       body: JSON.stringify({ username, password, turnstileToken }),
     });
     if (!r.ok) return { ok: false, status: r.status };
-    localStorage.setItem("qm-authed", "1");
-    setAuthed(true);
-    const list = (await (await api("/memos")).json()) as MemoMeta[];
-    setMemos(list);
-    setLoading(false);
-    newMemo(); // land in a fresh document, ready to write
+    await afterLogin();
     return { ok: true };
+  }
+
+  async function passkeyLogin(): Promise<void> {
+    const optRes = await api("/passkey/auth/options", { method: "POST" });
+    if (!optRes.ok) throw new Error("options failed");
+    const options = await optRes.json() as PublicKeyCredentialRequestOptionsJSON;
+    const authResp = await startAuthentication({ optionsJSON: options });
+    const verRes = await api("/passkey/auth/verify", {
+      method: "POST",
+      body: JSON.stringify({ response: authResp, challenge: options.challenge }),
+    });
+    if (!verRes.ok) throw new Error("verify failed");
+    await afterLogin();
   }
 
   async function logout() {
@@ -950,7 +970,7 @@ export default function App() {
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
-  if (!authed) return <Login onLogin={login} />;
+  if (!authed) return <Login onLogin={login} onPasskeyLogin={passkeyLogin} />;
 
   return (
     <div className="app">
@@ -1308,8 +1328,10 @@ export default function App() {
 
 function Login({
   onLogin,
+  onPasskeyLogin,
 }: {
   onLogin: (u: string, p: string, token: string) => Promise<LoginResult>;
+  onPasskeyLogin: () => Promise<void>;
 }) {
   const [u, setU] = useState("");
   const [p, setP] = useState("");
@@ -1356,6 +1378,15 @@ function Login({
     }
   }
 
+  async function loginWithPasskey() {
+    setMsg(null);
+    try {
+      await onPasskeyLogin();
+    } catch {
+      setMsg("Passkey login failed or was cancelled.");
+    }
+  }
+
   return (
     <div className="center">
       <form className="login" onSubmit={submit}>
@@ -1369,6 +1400,7 @@ function Login({
         />
         {TURNSTILE_SITEKEY && <div ref={widget} className="turnstile" />}
         <button type="submit">Login</button>
+        <button type="button" onClick={loginWithPasskey}>Passkey로 로그인</button>
         {msg && <p className="err">{msg}</p>}
       </form>
     </div>

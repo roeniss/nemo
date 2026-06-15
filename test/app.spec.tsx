@@ -3249,6 +3249,26 @@ describe("checkbox rAF cursor positioning", () => {
     // Cursor should be at end of inserted new checkbox
     expect(ta.selectionStart).toBe("- [ ] item one\n- [ ] ".length);
   });
+
+  it("continues a plain list item on Enter and positions the cursor (rAF runs)", async () => {
+    const { ta } = await openEditorWithContent("- item one");
+    await act(async () => {
+      ta.selectionStart = ta.selectionEnd = ta.value.length;
+      fireEvent.keyDown(ta, { key: "Enter" });
+    });
+    await waitFor(() => expect(ta.value).toBe("- item one\n- "));
+    expect(ta.selectionStart).toBe("- item one\n- ".length);
+  });
+
+  it("collapses an empty plain list item on Enter (rAF runs)", async () => {
+    const { ta } = await openEditorWithContent("- item one\n- ");
+    await act(async () => {
+      ta.selectionStart = ta.selectionEnd = ta.value.length;
+      fireEvent.keyDown(ta, { key: "Enter" });
+    });
+    await waitFor(() => expect(ta.value).toBe("- item one\n\n"));
+    expect(ta.selectionStart).toBe("- item one\n".length + 1);
+  });
 });
 
 describe("checkbox toggle via preview click (real handler)", () => {

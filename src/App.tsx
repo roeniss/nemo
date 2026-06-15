@@ -148,10 +148,10 @@ export default function App() {
   const { importFile, importFolder, pasteImage, downloadMemo } =
     useImport({ content, currentIdRef, editorRef, onEdit, flash, setMemos });
   // always-latest openMemo, so the hashchange listener (registered once) never
-  // calls a stale closure. Reassigned to openMemo synchronously on the first render
-  // (below), before any listener can fire — so this placeholder is never invoked.
-  /* v8 ignore next */
-  const openMemoRef = useRef<(id: number) => void>(() => {});
+  // calls a stale closure. Assigned to openMemo synchronously on every render
+  // (below), before any listener can fire — so .current is always set by the
+  // time a listener invokes it (asserted with ! at the call sites).
+  const openMemoRef = useRef<(id: number) => void>();
 
   // navigate to a named view, syncing both React state and the URL hash
   function navigateTo(v: "memos" | "trash" | "settings") {
@@ -263,7 +263,7 @@ export default function App() {
       if (h === "trash") { setView("trash"); loadTrash(); return; }
       if (!h) { setView("memos"); setViewing(null); return; }
       const id = hashId();
-      if (id != null && id !== currentIdRef.current) openMemoRef.current(id);
+      if (id != null && id !== currentIdRef.current) openMemoRef.current!(id);
     }
     window.addEventListener("hashchange", onHash);
     return () => window.removeEventListener("hashchange", onHash);
@@ -489,9 +489,8 @@ export default function App() {
     const list = visibleMemosRef.current;
     const idx = list.findIndex((x) => x.id === id);
     // the deleted memo is the open one, which is always present in the visible list
-    // here (setMemos is async, so its row is still intact) — the -1 arm is defensive
-    /* v8 ignore next */
-    const next = idx === -1 ? undefined : list[idx + 1] ?? list[idx - 1];
+    // here (setMemos is async, so its row is still intact), so idx is never -1.
+    const next = list[idx + 1] ?? list[idx - 1];
     if (next) {
       loadMemo(next.id);
     } else {
@@ -535,15 +534,11 @@ export default function App() {
   }
 
   async function undoDelete() {
-    // the Undo button only renders inside `{undo && …}`, so undoDelete can never
-    // fire with undo === null — this guard is defensive and unreachable
-    /* v8 ignore next */
-    if (!undo) return;
-    const id = undo.id;
-    // undoDelete only runs while the undo toast is shown, which deleteMemo sets up
-    // together with undoTimer — so the timer is always present here
-    /* v8 ignore next */
-    if (undoTimer.current) clearTimeout(undoTimer.current);
+    // the Undo button only renders inside `{undo && …}`, so undoDelete only ever
+    // fires while undo is set; deleteMemo sets undoTimer alongside it, so the timer
+    // is always present here too.
+    const id = undo!.id;
+    clearTimeout(undoTimer.current!);
     setUndo(null);
     await api(`/memos/${id}/restore`, { method: "POST" });
     setMemos((await (await api("/memos")).json()) as MemoMeta[]);
@@ -584,11 +579,10 @@ export default function App() {
   function onEdit(value: string) {
     setContent(value);
     // onEdit only fires from the editor textarea / paste-insert, which mount only
-    // when currentId != null — so this guard is defensive and unreachable
-    /* v8 ignore next */
-    if (currentId == null) return;
+    // when currentId != null — so currentId is always a number here.
+    const id = currentId!;
     // local-first: persist to localStorage immediately, before any network call
-    kv.set(DRAFT + currentId, value);
+    kv.set(DRAFT + id, value);
     if (conflictRef.current || deletedRef.current) return; // resolve banner first; don't autosave
     if (timer.current) clearTimeout(timer.current);
     setSaving(true);
@@ -598,7 +592,7 @@ export default function App() {
     const delay = Math.max(0, Math.min(SAVE_DEBOUNCE, SAVE_MAX_WAIT - since));
     timer.current = setTimeout(() => {
       timer.current = null; // debounce fired — no edit pending (keeps the guard honest)
-      save(currentId, value);
+      save(id, value);
     }, delay);
   }
 
@@ -613,12 +607,9 @@ export default function App() {
       writeList(TEMPS_KEY, readList(TEMPS_KEY).map((t) => (t.id === id ? { ...t, title, updated_at: now } : t)));
       setMemos((m) => m.map((x) => (x.id === id ? { ...x, title, updated_at: now } : x)));
       // leaveCurrent() flushes a temp's pending save before currentId changes, so a
-      // temp save always runs while it is still the current memo — the false arm is defensive
-      /* v8 ignore next */
-      if (id === currentIdRef.current) {
-        loadedAt.current = now;
-        lastSaveAt.current = now;
-      }
+      // temp save always runs while it is still the current memo (id === currentIdRef.current).
+      loadedAt.current = now;
+      lastSaveAt.current = now;
       setSaving(false);
       return;
     }
@@ -977,15 +968,11 @@ export default function App() {
       const target = e.target as HTMLElement;
       if (target.tagName !== "INPUT" || (target as HTMLInputElement).type !== "checkbox") return;
       // the listener is only attached to the editor-mode preview (a memo is open and
-      // not in read-only trash view), so these guards are defensive
-      /* v8 ignore next */
-      if (viewingRef.current || currentIdRef.current == null) return;
+      // not in read-only trash view), so viewingRef is null and currentIdRef is set here.
       e.preventDefault();
       const allBoxes = Array.from(pv!.querySelectorAll('input[type="checkbox"]'));
+      // target is one of the queried boxes, so indexOf always finds it.
       const idx = allBoxes.indexOf(target);
-      // target is one of the queried boxes, so indexOf never returns -1 — defensive
-      /* v8 ignore next */
-      if (idx === -1) return;
       const toggled = toggleNthCheckbox(contentRef.current, idx);
       if (toggled != null) onEdit(toggled);
     }
@@ -997,10 +984,8 @@ export default function App() {
   // Feature 2: auto-continue checkbox list on Enter
   function handleEditorKeyDown(e: KeyboardEvent) {
     if (e.key !== "Enter" || e.metaKey || e.ctrlKey || e.altKey || e.shiftKey) return;
-    const el = editorRef.current;
-    // the handler is bound to the editor textarea, so its ref is always set here — defensive
-    /* v8 ignore next */
-    if (!el) return;
+    // the handler is bound to the editor textarea, so its ref is always set here.
+    const el = editorRef.current!;
     const pos = el.selectionStart;
     const val = el.value;
     // Find current line start
@@ -1063,12 +1048,9 @@ export default function App() {
       const newContent = val.slice(0, pos) + insertion + val.slice(pos);
       onEdit(newContent);
       requestAnimationFrame(() => {
-        // the editor is still mounted when this rAF runs; the null arm is defensive
-        /* v8 ignore next */
-        if (editorRef.current) {
-          const newPos = pos + insertion.length;
-          editorRef.current.setSelectionRange(newPos, newPos);
-        }
+        // the editor is still mounted when this rAF runs.
+        const newPos = pos + insertion.length;
+        editorRef.current!.setSelectionRange(newPos, newPos);
       });
     }
   }
@@ -1135,11 +1117,9 @@ export default function App() {
       const idx = list.findIndex((m) => m.id === currentIdRef.current);
       const next = idx === -1 ? (down ? 0 : list.length - 1) : idx + (down ? 1 : -1);
       if (next < 0 || next >= list.length) return; // clamp at the ends
-      const target = list[next];
-      // next is a clamped in-range index distinct from the current row, so target is
-      // always a defined, different memo — the guard's false arm is unreachable
-      /* v8 ignore next */
-      if (target && target.id !== currentIdRef.current) openMemoRef.current(target.id);
+      // next is a clamped in-range index distinct from the current row, so list[next]
+      // is always a defined memo with an id different from the current one.
+      openMemoRef.current!(list[next].id);
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);

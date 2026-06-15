@@ -465,21 +465,11 @@ app.post("/api/ext/memos", async (c) => {
 // the unified { response } shape instead of Hono's default text 404.
 app.all("/api/ext/*", (c) => c.json({ response: "not found" }, 404));
 
-// gate everything under /api except the public auth + /api/ext routes
+// gate everything under /api except the public auth + /api/ext routes. The public
+// routes (/api/login, /api/logout, /api/ext/*, /api/passkey/auth/*) are all
+// registered before this middleware, so their handlers respond first and this
+// gate only ever runs for the remaining authenticated routes.
 app.use("/api/*", (c, next) => {
-  const p = c.req.path;
-  // /api/login, /api/logout and the /api/ext/* surface are registered before this
-  // middleware, so their handlers respond first and the gate never actually runs
-  // for them — this guard is a defensive net for any future reordering, hence
-  // unreachable under the current routes and excluded from coverage.
-  /* v8 ignore next */
-  if (
-    p === "/api/login" ||
-    p === "/api/logout" ||
-    p.startsWith("/api/ext/") ||
-    p === "/api/passkey/auth/options" ||
-    p === "/api/passkey/auth/verify"
-  ) return next();
   return jwt({ secret: c.env.JWT_SECRET, cookie: COOKIE, alg: "HS256" })(c, next);
 });
 

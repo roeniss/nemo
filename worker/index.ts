@@ -200,11 +200,12 @@ app.post("/api/ext/memos", async (c) => {
   if (typeof content !== "string" || !content.trim()) {
     return c.json({ response: "content required" }, 400);
   }
+  const finalContent = content.startsWith("# ") ? content : `# ${content}`;
   const now = Date.now();
   await c.env.DB.prepare(
     "INSERT INTO memos (title, content, created_at, updated_at) VALUES (?, ?, ?, ?)"
   )
-    .bind(titleFrom(content), content, now, now)
+    .bind(titleFrom(finalContent), finalContent, now, now)
     .run();
   return c.json({ response: "done" }, 201);
 });

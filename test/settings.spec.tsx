@@ -179,6 +179,25 @@ describe("Settings — logout", () => {
   });
 });
 
+describe("Settings — admin panel", () => {
+  it("renders the AdminPanel when admin is true", async () => {
+    handler = (path, method) => {
+      if (path === "/tokens" && method === "GET") return json([]);
+      if (path === "/admin/users" && method === "GET") return json([]);
+      return json({}, 404);
+    };
+    const { container } = render(<Settings flash={vi.fn()} admin={true} />);
+    await waitFor(() => expect(container.textContent).toContain("Admin: Users"));
+  });
+
+  it("does not render the AdminPanel when admin is false", async () => {
+    handler = () => json([]);
+    const { container } = render(<Settings flash={vi.fn()} admin={false} />);
+    await waitFor(() => expect(container.textContent).toContain("No tokens yet"));
+    expect(container.textContent).not.toContain("Admin: Users");
+  });
+});
+
 describe("Settings — passkey registration", () => {
   const fakeOptions = {
     challenge: "test-challenge-abc",

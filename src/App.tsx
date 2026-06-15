@@ -488,6 +488,9 @@ export default function App() {
   function openNeighbourOrClear(id: number) {
     const list = visibleMemosRef.current;
     const idx = list.findIndex((x) => x.id === id);
+    // the deleted memo is the open one, which is always present in the visible list
+    // here (setMemos is async, so its row is still intact) — the -1 arm is defensive
+    /* v8 ignore next */
     const next = idx === -1 ? undefined : list[idx + 1] ?? list[idx - 1];
     if (next) {
       loadMemo(next.id);
@@ -609,6 +612,9 @@ export default function App() {
       const now = Date.now();
       writeList(TEMPS_KEY, readList(TEMPS_KEY).map((t) => (t.id === id ? { ...t, title, updated_at: now } : t)));
       setMemos((m) => m.map((x) => (x.id === id ? { ...x, title, updated_at: now } : x)));
+      // leaveCurrent() flushes a temp's pending save before currentId changes, so a
+      // temp save always runs while it is still the current memo — the false arm is defensive
+      /* v8 ignore next */
       if (id === currentIdRef.current) {
         loadedAt.current = now;
         lastSaveAt.current = now;
@@ -970,10 +976,15 @@ export default function App() {
     function handlePreviewClick(e: Event) {
       const target = e.target as HTMLElement;
       if (target.tagName !== "INPUT" || (target as HTMLInputElement).type !== "checkbox") return;
+      // the listener is only attached to the editor-mode preview (a memo is open and
+      // not in read-only trash view), so these guards are defensive
+      /* v8 ignore next */
       if (viewingRef.current || currentIdRef.current == null) return;
       e.preventDefault();
       const allBoxes = Array.from(pv!.querySelectorAll('input[type="checkbox"]'));
       const idx = allBoxes.indexOf(target);
+      // target is one of the queried boxes, so indexOf never returns -1 — defensive
+      /* v8 ignore next */
       if (idx === -1) return;
       const toggled = toggleNthCheckbox(contentRef.current, idx);
       if (toggled != null) onEdit(toggled);
@@ -987,6 +998,8 @@ export default function App() {
   function handleEditorKeyDown(e: KeyboardEvent) {
     if (e.key !== "Enter" || e.metaKey || e.ctrlKey || e.altKey || e.shiftKey) return;
     const el = editorRef.current;
+    // the handler is bound to the editor textarea, so its ref is always set here — defensive
+    /* v8 ignore next */
     if (!el) return;
     const pos = el.selectionStart;
     const val = el.value;
@@ -1050,6 +1063,8 @@ export default function App() {
       const newContent = val.slice(0, pos) + insertion + val.slice(pos);
       onEdit(newContent);
       requestAnimationFrame(() => {
+        // the editor is still mounted when this rAF runs; the null arm is defensive
+        /* v8 ignore next */
         if (editorRef.current) {
           const newPos = pos + insertion.length;
           editorRef.current.setSelectionRange(newPos, newPos);

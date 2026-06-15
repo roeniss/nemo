@@ -33,6 +33,8 @@ function makeServer() {
     loginStatus: 200, // /login result
     searchThrows: false, // GET /api/search network failure (offline path)
     searchStatus: 0, // override GET /api/search status (e.g. 500) when > 0
+    meOk: true, // GET /me (admin probe) ok; flip false to force a not-ok response
+    meThrows: false, // GET /me rejects (network error) — exercises the admin-probe catch
   };
 
   function meta(r: Row) {
@@ -52,7 +54,9 @@ function makeServer() {
 
     // ---- auth / list ----
     if (path === "/me") {
+      if (opts.meThrows) throw new Error("offline /me");
       if (opts.meStatus !== 200) return new Response("", { status: opts.meStatus });
+      if (!opts.meOk) return new Response("", { status: 500 });
       return json({ ok: true });
     }
     if (path === "/login" && method === "POST") {
@@ -3307,6 +3311,17 @@ describe("checkbox toggle via preview click (real handler)", () => {
     });
     expect(ta.value).toBe("- [ ] one\n\nplain text");
   });
+
+  it("leaves the source unchanged when the clicked checkbox has no matching `- [ ]` token", async () => {
+    // `* [ ]` renders as a task checkbox but the toggle regex only matches `- [ ]`,
+    // so toggleNthCheckbox returns null (matchStart === -1) and onEdit is skipped.
+    const { container, ta } = await openEditorWithContent("* [ ] starred");
+    const boxes = await findCheckboxes(container);
+    await act(async () => {
+      bubblingClick(boxes[0]);
+    });
+    expect(ta.value).toBe("* [ ] starred");
+  });
 });
 
 // ===========================================================================
@@ -3455,6 +3470,217 @@ describe("plain list auto-continue on Enter", () => {
       fireEvent.keyDown(ta, { key: "Enter" });
     });
     await waitFor(() => expect(ta.value).toBe("- [ ] checkbox item\n- [ ] "));
+  });
+});
+
+describe("remaining branch coverage (issue #86)", () => {
+  it("leaves admin off when the /me probe responds not-ok", async () => {
+    authedBoot();
+    server.opts.meOk = false; // /me returns 500 → admin probe resolves to null
+    const { container } = render(<App />);
+    await waitFor(() => expect(container.querySelector(".side-tabs")).toBeTruthy());
+    // open Settings — the admin panel must not appear (admin stayed false)
+    await act(async () => {
+      fireEvent.click(container.querySelector(".settings-toggle")!);
+    });
+    await waitFor(() => expect(container.querySelector(".settings")).toBeTruthy());
+    expect(container.textContent).not.toContain("Admin: Users");
+  });
+
+  it("swallows a rejected /me admin probe and still boots", async () => {
+    authedBoot();
+    server.opts.meThrows = true; // the admin probe fetch rejects → .catch(() => {}) runs
+    const { container } = render(<App />);
+    await waitFor(() => expect(container.querySelector(".side-tabs")).toBeTruthy());
+    // boot completed normally; admin stayed off
+    await act(async () => {
+      fireEvent.click(container.querySelector(".settings-toggle")!);
+    });
+    await waitFor(() => expect(container.querySelector(".settings")).toBeTruthy());
+    expect(container.textContent).not.toContain("Admin: Users");
+  });
+
+  it("clicking the topbar gear again toggles Settings back to the memos view", async () => {
+    authedBoot();
+    const { container } = render(<App />);
+    await waitFor(() => expect(container.querySelector(".side-tabs")).toBeTruthy());
+    const gear = container.querySelector(".settings-toggle") as HTMLButtonElement;
+
+    // open Settings
+    await act(async () => { fireEvent.click(gear); });
+    await waitFor(() => expect(container.querySelector(".settings")).toBeTruthy());
+
+    // click the gear again while view === "settings" → navigateTo("memos")
+    await act(async () => { fireEvent.click(gear); });
+    await waitFor(() => expect(container.querySelector(".settings")).toBeFalsy());
+    expect(location.hash).toBe("");
+  });
+
+  it("keeps a #settings hash on offline boot without opening a memo", async () => {
+    authedBoot();
+    location.hash = "#settings";
+    // make the very first /memos GET throw so boot takes the offline path
+    let first = true;
+    const orig = server.fetchImpl;
+    globalThis.fetch = vi.fn(async (input: any, init: any) => {
+      const url = String(input);
+      if (first && url.includes("/memos") && (!init || (init.method || "GET") === "GET")) {
+        first = false;
+        throw new Error("offline boot");
+      }
+      return orig(input, init);
+    }) as unknown as typeof fetch;
+
+    const { container } = render(<App />);
+    await waitFor(() => expect(container.querySelector(".status.offline")).toBeTruthy());
+    await waitFor(() => expect(container.querySelector(".settings")).toBeTruthy());
+    expect(location.hash).toBe("#settings");
+  });
+
+  // Open a memo, then filter the visible list with a search that excludes it, so
+  // the open memo's id is absent from visibleMemos (idx === -1). Alt+J/K then fall
+  // back to the first/last visible row instead of stepping from the current index.
+  async function openOneThenFilterToTwo(container: HTMLElement) {
+    const one = server.seed({ title: "Alpha", content: "# Alpha\n\naaa" });
+    server.seed({ title: "Bravo", content: "# Bravo\n\nbbb" });
+    render(<App />, { container });
+    await waitFor(() => expect(container.querySelectorAll(".memo-list li").length).toBeGreaterThanOrEqual(2));
+    await act(async () => {
+      location.hash = "#" + one.id;
+      window.dispatchEvent(new HashChangeEvent("hashchange"));
+    });
+    await waitFor(() =>
+      expect((container.querySelector("textarea.editor") as HTMLTextAreaElement)?.value).toContain("aaa")
+    );
+    const search = container.querySelector("input.search") as HTMLInputElement;
+    await act(async () => {
+      fireEvent.input(search, { target: { value: "Bravo" } });
+    });
+    await waitFor(() => expect(container.querySelectorAll(".memo-list li").length).toBe(1));
+  }
+
+  it("Alt+J selects the first visible memo when the open memo is filtered out", async () => {
+    authedBoot();
+    const container = document.createElement("div");
+    document.body.appendChild(container);
+    await openOneThenFilterToTwo(container);
+    await act(async () => {
+      fireEvent.keyDown(window, { code: "KeyJ", altKey: true });
+    });
+    await waitFor(() => expect(container.querySelector(".memo-list li.active .memo-title")?.textContent).toBe("Bravo"));
+  });
+
+  it("Alt+K selects the last visible memo when the open memo is filtered out", async () => {
+    authedBoot();
+    const container = document.createElement("div");
+    document.body.appendChild(container);
+    await openOneThenFilterToTwo(container);
+    await act(async () => {
+      fireEvent.keyDown(window, { code: "KeyK", altKey: true });
+    });
+    await waitFor(() => expect(container.querySelector(".memo-list li.active .memo-title")?.textContent).toBe("Bravo"));
+  });
+
+  it("background sync skips the open memo while it has an unsynced draft", async () => {
+    authedBoot();
+    const row = server.seed({ title: "Drafted", content: "# Drafted\n\nbody" });
+    location.hash = "#" + row.id;
+    const { container } = render(<App />);
+    await waitFor(() =>
+      expect((container.querySelector("textarea.editor") as HTMLTextAreaElement)?.value).toContain("body")
+    );
+    // leave an unsynced local draft and make the server list look newer so the poll
+    // would otherwise reload — the draft guard (line 818) makes it bail instead.
+    // The PUT that recover() attempts is made to fail so the draft is NOT cleared,
+    // keeping it present when the sync reaches the guard.
+    kv.set(DRAFT + row.id, "# Drafted\n\nlocal unsynced");
+    row.updated_at = server.now() + 1000;
+    const orig = server.fetchImpl;
+    globalThis.fetch = vi.fn(async (input: any, init: any) => {
+      const url = String(input);
+      const method = (init?.method || "GET").toUpperCase();
+      if (url.includes(`/memos/${row.id}`) && method === "PUT") throw new Error("offline put");
+      return orig(input, init);
+    }) as unknown as typeof fetch;
+
+    await act(async () => {
+      window.dispatchEvent(new Event("focus"));
+      await new Promise((r) => setTimeout(r, 0));
+    });
+    // the draft survives (sync bailed at the guard instead of reloading)
+    await waitFor(() => expect(kv.get(DRAFT + row.id)).not.toBeNull());
+  });
+
+  it("does not re-set content when the revalidated server copy matches the cached local copy", async () => {
+    authedBoot();
+    const row = server.seed({ title: "Same", content: "# Same\n\nidentical body" });
+    // pre-seed the content cache with the exact server content so loadMemo shows it
+    // instantly and the background revalidate finds memo.content === local (the
+    // `memo.content !== local` guard's false arm — no redundant setContent).
+    kv.set(CONTENT_CACHE + row.id, "# Same\n\nidentical body");
+    localStorage.setItem(LIST_CACHE, JSON.stringify([{ id: row.id, title: "Same", updated_at: row.updated_at }]));
+    location.hash = "#" + row.id;
+    const { container } = render(<App />);
+    await waitFor(() =>
+      expect((container.querySelector("textarea.editor") as HTMLTextAreaElement)?.value).toContain("identical body")
+    );
+    // give the background revalidate a tick to run
+    await act(async () => { await new Promise((r) => setTimeout(r, 0)); });
+    expect((container.querySelector("textarea.editor") as HTMLTextAreaElement)?.value).toBe("# Same\n\nidentical body");
+  });
+
+  it("continues a checkbox line that is not the last line in the document", async () => {
+    authedBoot();
+    const content = "- [ ] item one\nsecond line";
+    const row = server.seed({ content, title: "test" });
+    location.hash = "#" + row.id;
+    const { container } = render(<App />);
+    await waitFor(() =>
+      expect((container.querySelector("textarea.editor") as HTMLTextAreaElement)?.value).toBe(content)
+    );
+    const ta = container.querySelector("textarea.editor") as HTMLTextAreaElement;
+    // cursor at the end of the checkbox line (before its trailing newline) so
+    // lineEnd !== -1, exercising the `: lineEnd` false arm of the line slice.
+    await act(async () => {
+      ta.selectionStart = ta.selectionEnd = "- [ ] item one".length;
+      fireEvent.keyDown(ta, { key: "Enter" });
+    });
+    await waitFor(() => expect(ta.value).toBe("- [ ] item one\n- [ ] \nsecond line"));
+  });
+
+  it("collapses an empty checkbox line that is not the last line", async () => {
+    authedBoot();
+    const content = "- [ ] \nsecond line";
+    const row = server.seed({ content, title: "test" });
+    location.hash = "#" + row.id;
+    const { container } = render(<App />);
+    await waitFor(() =>
+      expect((container.querySelector("textarea.editor") as HTMLTextAreaElement)?.value).toBe(content)
+    );
+    const ta = container.querySelector("textarea.editor") as HTMLTextAreaElement;
+    await act(async () => {
+      ta.selectionStart = ta.selectionEnd = "- [ ] ".length; // end of empty checkbox line
+      fireEvent.keyDown(ta, { key: "Enter" });
+    });
+    // empty checkbox collapses; the `: lineEnd` false arm keeps the trailing line
+    await waitFor(() => expect(ta.value).toBe("\n\nsecond line"));
+  });
+
+  it("collapses an empty plain list line that is not the last line", async () => {
+    authedBoot();
+    const content = "- \nsecond line";
+    const row = server.seed({ content, title: "test" });
+    location.hash = "#" + row.id;
+    const { container } = render(<App />);
+    await waitFor(() =>
+      expect((container.querySelector("textarea.editor") as HTMLTextAreaElement)?.value).toBe(content)
+    );
+    const ta = container.querySelector("textarea.editor") as HTMLTextAreaElement;
+    await act(async () => {
+      ta.selectionStart = ta.selectionEnd = "- ".length; // end of empty plain list line
+      fireEvent.keyDown(ta, { key: "Enter" });
+    });
+    await waitFor(() => expect(ta.value).toBe("\n\nsecond line"));
   });
 });
 

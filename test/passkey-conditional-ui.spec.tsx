@@ -166,6 +166,31 @@ describe("passkey conditional UI", () => {
     expect(usernameInput.getAttribute("autocomplete")).toBe("username webauthn");
   });
 
+  it("shows an error when passkey verify returns non-ok", async () => {
+    // conditional UI is rejected first; the manual button click then resolves
+    // startAuthentication but the verify endpoint fails → passkeyLogin throws.
+    vi.mocked(startAuthentication)
+      .mockRejectedValueOnce(Object.assign(new Error("NotAllowedError"), { name: "NotAllowedError" }))
+      .mockResolvedValueOnce({ id: "cred-id" } as any);
+
+    const { fetchImpl } = makeServer({ passkeyVerifyStatus: 401 });
+    globalThis.fetch = fetchImpl as unknown as typeof fetch;
+
+    const { default: App } = await import("../src/App");
+    const { container } = render(<App />);
+    await waitFor(() => expect(container.querySelector(".login")).toBeTruthy());
+    await waitFor(() => expect(vi.mocked(startAuthentication)).toHaveBeenCalled());
+
+    const passkeyBtn = Array.from(container.querySelectorAll("button")).find(
+      (b) => b.textContent?.includes("Passkey")
+    )!;
+    passkeyBtn.click();
+
+    await waitFor(() =>
+      expect(container.querySelector(".err")?.textContent).toContain("Passkey login failed")
+    );
+  });
+
   it("passkey button still works as manual fallback", async () => {
     // conditional UI is silently rejected (no passkeys)
     vi.mocked(startAuthentication)

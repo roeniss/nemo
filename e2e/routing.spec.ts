@@ -63,3 +63,60 @@ test.describe("per-memo URL routing", () => {
     }
   });
 });
+
+test.describe("named-view URL routing (#settings / #trash)", () => {
+  test("direct navigation to /#settings shows the settings view", async ({ page }) => {
+    await page.goto("/#settings");
+    await expect(page.locator(sel.settings)).toBeVisible();
+    await expect(page).toHaveURL(/#settings$/);
+  });
+
+  test("direct navigation to /#trash shows the trash view", async ({ page }) => {
+    await page.goto("/#trash");
+    // the trash tab becomes active and the trash list renders (empty or not)
+    await expect(page.locator(".side-tabs .tab.active")).toHaveText("Trash");
+    await expect(page).toHaveURL(/#trash$/);
+  });
+
+  test("the Settings button sets #settings; clicking again clears it", async ({ page }) => {
+    await page.goto("/");
+    await expect(page.locator(sel.editor)).toBeVisible();
+    await page.click(sel.settingsBtn);
+    await expect(page.locator(sel.settings)).toBeVisible();
+    await expect(page).toHaveURL(/#settings$/);
+    // toggling off returns to the memos view and drops the named hash
+    await page.click(sel.settingsBtn);
+    await expect(page.locator(sel.settings)).toBeHidden();
+    await expect(page).not.toHaveURL(/#settings$/);
+  });
+
+  test("reloading on /#settings stays on settings", async ({ page }) => {
+    await page.goto("/#settings");
+    await expect(page.locator(sel.settings)).toBeVisible();
+    await page.reload();
+    await expect(page.locator(sel.settings)).toBeVisible();
+    await expect(page).toHaveURL(/#settings$/);
+  });
+
+  test("back/forward between #trash and #settings named views", async ({ page }) => {
+    await page.goto("/#trash");
+    await expect(page.locator(".side-tabs .tab.active")).toHaveText("Trash");
+    await expect(page).toHaveURL(/#trash$/);
+
+    // navigate to settings (pushes a history entry)
+    await page.goto("/#settings");
+    await expect(page.locator(sel.settings)).toBeVisible();
+    await expect(page).toHaveURL(/#settings$/);
+
+    // back → trash view
+    await page.goBack();
+    await expect(page).toHaveURL(/#trash$/);
+    await expect(page.locator(sel.settings)).toBeHidden();
+    await expect(page.locator(".side-tabs .tab.active")).toHaveText("Trash");
+
+    // forward → settings view
+    await page.goForward();
+    await expect(page).toHaveURL(/#settings$/);
+    await expect(page.locator(sel.settings)).toBeVisible();
+  });
+});

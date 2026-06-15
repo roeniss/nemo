@@ -62,4 +62,6 @@ export const sel = {
   toast: ".toast",
   themeToggle: ".topbar .theme-toggle",
   githubLink: ".topbar .github-link",
+  settingsBtn: '.topbar button[aria-label="Settings"]',
+  settings: ".settings",
 };

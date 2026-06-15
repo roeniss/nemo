@@ -222,6 +222,13 @@ input {
   color: var(--fg-faint);
   cursor: default;
 }
+.shortcut-hint {
+  margin: 4px 0 0;
+  padding: 4px 12px;
+  font-size: 0.7rem;
+  color: var(--fg-faint);
+  text-align: center;
+}
 .memo-title {
   flex: 1;
   white-space: nowrap;

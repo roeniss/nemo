@@ -358,10 +358,11 @@ export function registerMcp(
       return c.json({ error: "unauthorized" }, 401);
     };
     if (!token) return unauthorized();
+    // honor OAuth access-token expiry (expires_at); manual PATs leave it NULL
     const row = await c.env.DB.prepare(
-      "SELECT id, user_id FROM api_tokens WHERE token_hash = ? AND revoked_at IS NULL"
+      "SELECT id, user_id FROM api_tokens WHERE token_hash = ? AND revoked_at IS NULL AND (expires_at IS NULL OR expires_at > ?)"
     )
-      .bind(await deps.hashToken(token))
+      .bind(await deps.hashToken(token), Date.now())
       .first<{ id: number; user_id: number }>();
     if (!row) return unauthorized();
     await c.env.DB.prepare("UPDATE api_tokens SET last_used_at = ? WHERE id = ?")

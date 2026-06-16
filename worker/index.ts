@@ -10,6 +10,7 @@ import {
 import type { AuthenticatorTransportFuture } from "@simplewebauthn/server";
 import type { Context } from "hono";
 import { registerMcp } from "./mcp";
+import { registerOAuth } from "./oauth";
 
 export type Bindings = {
   DB: D1Database;
@@ -482,6 +483,11 @@ app.all("/api/ext/*", (c) => c.json({ response: "not found" }, 404));
 // Remote MCP server (/api/mcp) — Bearer-authenticated, registered before the
 // cookie-JWT gate so it runs its own token auth. See worker/mcp.ts.
 registerMcp(app, { hashToken, titleFrom });
+
+// OAuth 2.1 authorization layer (discovery, DCR, authorize, token) that lets
+// Claude web/mobile obtain MCP tokens. All routes are public (no cookie-JWT
+// gate); /authorize reuses the nemo login itself. See worker/oauth.ts.
+registerOAuth(app, { hashToken, newToken, verifyPassword });
 
 // gate everything under /api except the public auth + /api/ext routes. The public
 // routes (/api/login, /api/logout, /api/ext/*, /api/passkey/auth/*) are all

@@ -44,10 +44,41 @@ CREATE TABLE IF NOT EXISTS api_tokens (
   user_id INTEGER NOT NULL, -- owning user
   created_at INTEGER NOT NULL,
   last_used_at INTEGER, -- stamped on each successful /api/ext/* call
-  revoked_at INTEGER    -- soft-revoke: row kept, token stops authenticating
+  revoked_at INTEGER,   -- soft-revoke: row kept, token stops authenticating
+  expires_at INTEGER    -- OAuth access tokens expire; manual PATs leave this NULL
 );
 
 CREATE INDEX IF NOT EXISTS idx_api_tokens_hash ON api_tokens (token_hash);
+
+-- OAuth 2.1 authorization layer for the remote MCP server (worker/oauth.ts).
+-- Registered clients (Claude self-registers via dynamic client registration).
+CREATE TABLE IF NOT EXISTS oauth_clients (
+  client_id TEXT PRIMARY KEY,
+  redirect_uris TEXT NOT NULL, -- JSON array of allowed redirect URIs
+  client_name TEXT NOT NULL DEFAULT '',
+  created_at INTEGER NOT NULL
+);
+
+-- Short-lived, single-use authorization codes bound to a PKCE challenge.
+CREATE TABLE IF NOT EXISTS oauth_codes (
+  code_hash TEXT PRIMARY KEY,
+  client_id TEXT NOT NULL,
+  user_id INTEGER NOT NULL,
+  redirect_uri TEXT NOT NULL,
+  code_challenge TEXT NOT NULL, -- PKCE S256 challenge
+  scope TEXT,
+  expires_at INTEGER NOT NULL,
+  created_at INTEGER NOT NULL
+);
+
+-- Long-lived refresh tokens (hashed). Access tokens live in api_tokens.
+CREATE TABLE IF NOT EXISTS oauth_refresh (
+  token_hash TEXT PRIMARY KEY,
+  client_id TEXT NOT NULL,
+  user_id INTEGER NOT NULL,
+  created_at INTEGER NOT NULL,
+  revoked_at INTEGER
+);
 
 -- WebAuthn / passkey credentials. One row per registered authenticator.
 CREATE TABLE IF NOT EXISTS webauthn_credentials (

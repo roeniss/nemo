@@ -1494,10 +1494,20 @@ function Login({
   const [token, setToken] = useState("");
   const widget = useRef<HTMLDivElement>(null);
 
-  // Immediately show the passkey picker modal on mount.
-  // Silently ignored if no passkeys available, user cancels, or browser unsupported.
+  // Immediately show the passkey picker modal on mount — but only when the device
+  // actually has a platform authenticator, so browsers/devices without one don't
+  // get a pointless popup. (We can't tell whether a passkey is registered for THIS
+  // site without prompting — that's a privacy boundary — so a user with an
+  // authenticator but no nemo passkey may still see it; the manual button covers
+  // the rest.) Silently ignored if the user cancels.
   useEffect(() => {
-    onPasskeyLogin().catch(() => {});
+    const PK = window.PublicKeyCredential;
+    if (!PK?.isUserVerifyingPlatformAuthenticatorAvailable) return;
+    PK.isUserVerifyingPlatformAuthenticatorAvailable()
+      .then((available) => {
+        if (available) return onPasskeyLogin();
+      })
+      .catch(() => {});
   }, []);
 
   // load + render the Turnstile widget (only when a site key is configured)

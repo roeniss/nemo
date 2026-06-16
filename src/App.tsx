@@ -841,12 +841,19 @@ export default function App() {
     };
   }, [authed]);
 
-  // Cmd/Ctrl+S: flush pending debounce and save immediately
+  // Keyboard shortcuts that need fresh state/handlers (so they live here, with
+  // currentId/content/undo/view/viewing as deps, rather than in the ref-based
+  // Alt+J/K effect below):
+  //   Cmd/Ctrl+S — flush the pending debounce and save immediately
+  //   Alt+N — new memo (newMemo flushes the in-progress one first)
+  //   Alt+D — trash the current memo (with the 6s undo)
+  //   Alt+U — undo the last delete, or restore the trashed memo being viewed
+  // The Alt branch uses e.code (physical key) because macOS Option+letter composes
+  // a special character into e.key; preventDefault also stops that character.
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
-      if (!(e.metaKey || e.ctrlKey)) return;
-      const k = e.key.toLowerCase();
-      if (k === "s") {
+      if ((e.metaKey || e.ctrlKey) && !e.altKey) {
+        if (e.key.toLowerCase() !== "s") return;
         e.preventDefault();
         if (timer.current) clearTimeout(timer.current);
         timer.current = null;
@@ -854,15 +861,32 @@ export default function App() {
           setSaving(true);
           save(currentId, content);
         }
-      } else if (k === "k") {
-        // new memo — newMemo() flushes the in-progress memo first
+        return;
+      }
+      if (!e.altKey || e.metaKey || e.ctrlKey) return;
+      if (e.code === "KeyN") {
         e.preventDefault();
         newMemoFromUI();
+      } else if (e.code === "KeyD") {
+        // delete the open memo (memos view only; trash rows aren't "current")
+        if (view === "memos" && currentId != null) {
+          e.preventDefault();
+          deleteMemo(currentId);
+        }
+      } else if (e.code === "KeyU") {
+        // undo the last delete if one is pending, else restore the viewed trash memo
+        if (undo) {
+          e.preventDefault();
+          undoDelete();
+        } else if (view === "trash" && viewing) {
+          e.preventDefault();
+          restoreMemo(viewing.id);
+        }
       }
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [currentId, content]);
+  }, [currentId, content, undo, view, viewing]);
 
   // flush pending save on tab close / reload (keepalive survives unload), and
   // warn the user (⌘W / reload) while a server save is still in flight so the
@@ -1198,7 +1222,7 @@ export default function App() {
                   </li>
                 )}
               </ul>
-              <p className="shortcut-hint">Alt+J / Alt+K to navigate</p>
+              <p className="shortcut-hint">Alt+J / Alt+K to navigate · Alt+N new · Alt+D delete</p>
             </>
           ) : (
             <ul className="memo-list">

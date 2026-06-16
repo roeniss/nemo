@@ -29,6 +29,10 @@ export type Variables = {
 
 const COOKIE = "token";
 const MAX_AGE = 60 * 60 * 24 * 7; // 7d
+// sliding session: re-issue the cookie once the current token is older than this
+// (issued > 1 day ago), so an active session keeps sliding its 7d window forward.
+// An idle session is never refreshed and simply lapses at its own MAX_AGE expiry.
+const SLIDE_AFTER = 60 * 60 * 24; // 1d (seconds)
 const HOUR = 60 * 60 * 1000;
 
 // idle gap that ends an editing session, and the max a session can run before we
@@ -126,9 +130,41 @@ export async function verifyPassword(password: string, stored: string): Promise<
 const app = new Hono<{ Bindings: Bindings; Variables: Variables }>();
 
 // --- user helper --------------------------------------------------------
-function getUser(c: Context<{ Bindings: Bindings; Variables: Variables }>): { uid: number; username: string; admin: boolean } {
+type Ctx = Context<{ Bindings: Bindings; Variables: Variables }>;
+
+function getUser(c: Ctx): { uid: number; username: string; admin: boolean } {
   const p = c.get("jwtPayload");
   return { uid: p.uid as number, username: p.sub as string, admin: !!p.admin };
+}
+
+const SESSION_COOKIE = {
+  httpOnly: true,
+  secure: true,
+  sameSite: "Lax",
+  path: "/",
+  maxAge: MAX_AGE,
+} as const;
+
+// Mint a session JWT (exp = now + MAX_AGE) and set it as the auth cookie.
+async function issueSession(c: Ctx, claims: { sub: string; uid: number; admin: boolean }): Promise<void> {
+  const token = await sign(
+    { ...claims, exp: Math.floor(Date.now() / 1000) + MAX_AGE },
+    c.env.JWT_SECRET
+  );
+  setCookie(c, COOKIE, token, SESSION_COOKIE);
+}
+
+// Sliding-window refresh: once the (already-verified) token was issued more than
+// SLIDE_AFTER ago, re-issue it so continued activity keeps the user signed in.
+// `exp` is always issuedAt + MAX_AGE, so "issued ≥ 1 day ago" ⇔ "remaining lifetime
+// ≤ MAX_AGE − SLIDE_AFTER".
+async function slideSession(c: Ctx): Promise<void> {
+  const p = c.get("jwtPayload");
+  const { exp, sub, uid } = p;
+  if (typeof exp !== "number" || typeof sub !== "string" || typeof uid !== "number") return;
+  const now = Math.floor(Date.now() / 1000);
+  if (exp - now > MAX_AGE - SLIDE_AFTER) return; // still fresh — don't re-issue
+  await issueSession(c, { sub, uid, admin: !!p.admin });
 }
 
 // --- auth ---------------------------------------------------------------
@@ -173,17 +209,7 @@ app.post("/api/login", async (c) => {
   await c.env.DB.prepare("UPDATE users SET last_login_at = ? WHERE id = ?")
     .bind(Date.now(), user.id).run();
 
-  const token = await sign(
-    { sub: username, uid: user.id, admin: user.is_admin === 1, exp: Math.floor(Date.now() / 1000) + MAX_AGE },
-    c.env.JWT_SECRET
-  );
-  setCookie(c, COOKIE, token, {
-    httpOnly: true,
-    secure: true,
-    sameSite: "Lax",
-    path: "/",
-    maxAge: MAX_AGE,
-  });
+  await issueSession(c, { sub: username, uid: user.id, admin: user.is_admin === 1 });
   return c.json({ ok: true });
 });
 
@@ -285,17 +311,7 @@ app.post("/api/passkey/auth/verify", async (c) => {
   if (!userRow) return c.json({ error: "user not found" }, 401);
 
   // Issue JWT with full user payload
-  const token = await sign(
-    { sub: userRow.username, uid: userRow.id, admin: userRow.is_admin === 1, exp: Math.floor(Date.now() / 1000) + MAX_AGE },
-    c.env.JWT_SECRET
-  );
-  setCookie(c, COOKIE, token, {
-    httpOnly: true,
-    secure: true,
-    sameSite: "Lax",
-    path: "/",
-    maxAge: MAX_AGE,
-  });
+  await issueSession(c, { sub: userRow.username, uid: userRow.id, admin: userRow.is_admin === 1 });
   return c.json({ ok: true });
 });
 
@@ -493,9 +509,12 @@ registerOAuth(app, { hashToken, newToken, verifyPassword });
 // routes (/api/login, /api/logout, /api/ext/*, /api/passkey/auth/*) are all
 // registered before this middleware, so their handlers respond first and this
 // gate only ever runs for the remaining authenticated routes.
-app.use("/api/*", (c, next) => {
-  return jwt({ secret: c.env.JWT_SECRET, cookie: COOKIE, alg: "HS256" })(c, next);
-});
+app.use("/api/*", (c, next) =>
+  jwt({ secret: c.env.JWT_SECRET, cookie: COOKIE, alg: "HS256" })(c, async () => {
+    await slideSession(c); // sliding-window refresh on authenticated activity
+    await next();
+  })
+);
 
 app.get("/api/me", (c) => {
   const { uid, username, admin } = getUser(c);

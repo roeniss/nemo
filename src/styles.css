@@ -352,6 +352,35 @@ input {
   border-radius: 4px;
   font-size: 13px;
 }
+.shortcut-list {
+  margin: 12px 0 4px;
+}
+.shortcut-row {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  padding: 4px 0;
+}
+.shortcut-row dt {
+  flex: 0 0 200px;
+  white-space: nowrap;
+}
+.shortcut-row dd {
+  margin: 0;
+}
+.shortcut-sep,
+.shortcut-plus {
+  color: var(--fg-muted);
+  font-size: 12px;
+}
+.settings kbd {
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 1px 6px;
+  font-size: 12px;
+  font-family: inherit;
+}
 .token-create {
   display: flex;
   gap: 8px;

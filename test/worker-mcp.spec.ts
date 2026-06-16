@@ -38,7 +38,8 @@ CREATE TABLE api_tokens (
   user_id INTEGER NOT NULL,
   created_at INTEGER NOT NULL,
   last_used_at INTEGER,
-  revoked_at INTEGER
+  revoked_at INTEGER,
+  expires_at INTEGER
 );
 `;
 
@@ -117,6 +118,20 @@ describe("MCP auth", () => {
     await db.prepare("UPDATE api_tokens SET revoked_at = ? WHERE 1=1").bind(Date.now()).run();
     const r = await rpc(token, { jsonrpc: "2.0", id: 1, method: "ping" });
     expect(r.status).toBe(401);
+  });
+
+  it("rejects an expired OAuth access token", async () => {
+    const token = await mintToken();
+    await db.prepare("UPDATE api_tokens SET expires_at = ? WHERE 1=1").bind(Date.now() - 1000).run();
+    const r = await rpc(token, { jsonrpc: "2.0", id: 1, method: "ping" });
+    expect(r.status).toBe(401);
+  });
+
+  it("accepts a non-expired token", async () => {
+    const token = await mintToken();
+    await db.prepare("UPDATE api_tokens SET expires_at = ? WHERE 1=1").bind(Date.now() + 60_000).run();
+    const r = await rpc(token, { jsonrpc: "2.0", id: 1, method: "ping" });
+    expect(r.status).toBe(200);
   });
 
   it("stamps last_used_at on a valid call", async () => {

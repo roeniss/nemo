@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import app, { hashPassword, verifyPassword } from "../worker/index";
+import { sign, decode } from "hono/jwt";
 import { D1 } from "./d1";
 
 // AUTH_PASS is stored as a PBKDF2 hash; mint one once for the test password.
@@ -76,6 +77,46 @@ describe("auth", () => {
   });
   // Turnstile is skipped here (no TURNSTILE_SECRET in the test env), matching
   // the worker's "enforce only when configured" behaviour.
+});
+
+describe("sliding session", () => {
+  const nowSec = () => Math.floor(Date.now() / 1000);
+  // a signed session cookie whose token has `expOffsetSec` left to live (exp is
+  // always issuedAt + 7d, so a smaller offset == issued longer ago)
+  const cookieWithExp = async (expOffsetSec: number) => {
+    const t = await sign({ sub: "tester", uid: 1, admin: true, exp: nowSec() + expOffsetSec }, "test-secret");
+    return `token=${t}`;
+  };
+
+  it("does NOT re-issue a freshly-issued token (< 1 day old)", async () => {
+    const cookie = await cookieWithExp(60 * 60 * 24 * 7); // full 7d left → just issued
+    const r = await req("/api/me", { headers: { cookie } });
+    expect(r.status).toBe(200);
+    expect(r.headers.get("set-cookie")).toBeNull(); // no sliding refresh
+  });
+
+  it("re-issues a token older than 1 day, sliding the 7d window forward", async () => {
+    const cookie = await cookieWithExp(60 * 60 * 24 * 5); // 5d left → issued ~2d ago
+    const r = await req("/api/me", { headers: { cookie } });
+    expect(r.status).toBe(200);
+    const setCookie = r.headers.get("set-cookie") ?? "";
+    expect(setCookie).toContain("token=");
+    expect(setCookie).toContain("Max-Age=604800"); // a fresh 7d cookie
+    const fresh = setCookie.match(/token=([^;]+)/)![1];
+    const { payload } = decode(fresh);
+    // exp pushed back out to ~now + 7d, with the identity claims preserved
+    expect((payload.exp as number) - nowSec()).toBeGreaterThan(60 * 60 * 24 * 6);
+    expect(payload.sub).toBe("tester");
+    expect(payload.uid).toBe(1);
+    expect(payload.admin).toBe(true);
+  });
+
+  it("does not re-issue a token missing identity claims (defensive guard)", async () => {
+    // valid signature + exp but no uid → slideSession bails without re-issuing
+    const t = await sign({ sub: "tester", exp: nowSec() + 60 * 60 * 24 * 5 }, "test-secret");
+    const r = await req("/api/me", { headers: { cookie: `token=${t}` } });
+    expect(r.headers.get("set-cookie")).toBeNull();
+  });
 });
 
 describe("password hashing", () => {

@@ -18,13 +18,15 @@ test.describe("dark mode", () => {
     await toggle.click();
     await expect(page.locator(root)).not.toHaveAttribute("data-theme", "dark");
     await expect(toggle).toHaveAttribute("aria-label", "Light mode");
-    expect(await page.evaluate(() => localStorage.getItem("qm-theme"))).toBe("light");
+    // poll: the localStorage write lands in an effect a tick after the DOM updates,
+    // so a one-shot read can race the aria-label assertion above
+    await expect.poll(() => page.evaluate(() => localStorage.getItem("qm-theme"))).toBe("light");
 
     // light → dark
     await toggle.click();
     await expect(page.locator(root)).toHaveAttribute("data-theme", "dark");
     await expect(toggle).toHaveAttribute("aria-label", "Dark mode");
-    expect(await page.evaluate(() => localStorage.getItem("qm-theme"))).toBe("dark");
+    await expect.poll(() => page.evaluate(() => localStorage.getItem("qm-theme"))).toBe("dark");
 
     // the choice survives a reload, with no flash of the wrong theme
     await page.reload();
@@ -35,7 +37,7 @@ test.describe("dark mode", () => {
     await page.locator(sel.themeToggle).click();
     await expect(page.locator(root)).not.toHaveAttribute("data-theme", "dark");
     await expect(page.locator(sel.themeToggle)).toHaveAttribute("aria-label", "System theme");
-    expect(await page.evaluate(() => localStorage.getItem("qm-theme"))).toBe("system");
+    await expect.poll(() => page.evaluate(() => localStorage.getItem("qm-theme"))).toBe("system");
   });
 
   test("dark mode actually repaints the background", async ({ page }) => {

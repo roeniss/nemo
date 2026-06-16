@@ -21,8 +21,10 @@ test.describe("untouched memos stay off the server (#51)", () => {
     // create another memo → leaving the blank one drops it locally
     await page.locator(sel.newBtn).click();
     await expect(page).not.toHaveURL(new RegExp(`#${tempId}$`));
-    // the next one is also a local temp until it gets content
-    expect(await hashId(page)).toBeLessThan(0);
+    // the next one is also a local temp until it gets content. poll: newMemo()
+    // briefly clears currentId (so the hash blanks to "") mid-transition, and a
+    // one-shot read of that window parses "" as 0 → spurious failure
+    await expect.poll(() => hashId(page)).toBeLessThan(0);
   });
 
   test("an untouched new memo leaves nothing behind on reload (beforeunload)", async ({ page }) => {
@@ -34,8 +36,10 @@ test.describe("untouched memos stay off the server (#51)", () => {
     await page.reload(); // beforeunload drops the blank temp; boot cleanup is the backstop
     await expect(page.locator(sel.editor)).toBeVisible();
 
-    // the abandoned blank temp is gone from local storage (and was never on the server)
-    expect((await tempsOf(page)).some((t) => t.id === tempId)).toBe(false);
+    // the abandoned blank temp is gone from local storage (and was never on the
+    // server). poll: boot cleanup runs in the async load effect, which can lag the
+    // editor becoming visible
+    await expect.poll(() => tempsOf(page).then((ts) => ts.some((t) => t.id === tempId))).toBe(false);
   });
 
   test("a new memo with content materializes to the server", async ({ page, request }) => {
@@ -83,6 +87,7 @@ test.describe("untouched memos stay off the server (#51)", () => {
     await expect(page).not.toHaveURL(new RegExp(`#${tempId}$`));
 
     await expect(page.locator(sel.toast)).toHaveCount(0); // no undo toast for an unchanged memo
-    expect((await tempsOf(page)).some((t) => t.id === tempId)).toBe(false); // gone from local temps
+    // gone from local temps (poll: the temp removal settles independently of the URL change)
+    await expect.poll(() => tempsOf(page).then((ts) => ts.some((t) => t.id === tempId))).toBe(false);
   });
 });

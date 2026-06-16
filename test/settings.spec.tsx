@@ -370,4 +370,83 @@ describe("Settings — passkey list", () => {
     fireEvent.click(container.querySelector(".passkey-list .del")!);
     await waitFor(() => expect(container.textContent).toContain("No passkeys yet"));
   });
+
+  it("shows the custom name in place of the AAGUID label when set", async () => {
+    handler = (path, method) => {
+      if (path === "/tokens" && method === "GET") return json([]);
+      if (path === "/passkey/credentials" && method === "GET")
+        return json([
+          { credential_id: "c1", aaguid: "fbfc3007-154e-4ecc-8032-51d60de6b4c2", name: "Work laptop", created_at: 1700000000000 },
+        ]);
+      return json({}, 404);
+    };
+    const { container } = render(<Settings flash={vi.fn()} />);
+    await waitFor(() => expect(container.textContent).toContain("Work laptop"));
+    expect(container.textContent).not.toContain("iCloud Keychain"); // custom name wins
+  });
+
+  it("renames a passkey and refreshes the list", async () => {
+    let list = [
+      { credential_id: "c1", aaguid: null, name: null as string | null, created_at: 1700000000000 },
+    ];
+    let patched: any = null;
+    handler = (path, method, body) => {
+      if (path === "/tokens" && method === "GET") return json([]);
+      if (path === "/passkey/credentials" && method === "GET") return json(list);
+      if (path.startsWith("/passkey/credentials/") && method === "PATCH") {
+        patched = body;
+        list = [{ ...list[0], name: body.name }];
+        return json({ ok: true });
+      }
+      return json({}, 404);
+    };
+    window.prompt = vi.fn(() => "  My Phone  ");
+
+    const { container } = render(<Settings flash={vi.fn()} />);
+    const renameBtn = () => Array.from(container.querySelectorAll<HTMLButtonElement>(".passkey-list button")).find((b) => b.textContent === "Rename");
+    await waitFor(() => expect(renameBtn()).toBeTruthy());
+    fireEvent.click(renameBtn()!);
+    await waitFor(() => expect(container.textContent).toContain("My Phone"));
+    expect(patched).toEqual({ name: "My Phone" }); // trimmed
+  });
+
+  it("does not PATCH when the rename prompt is cancelled", async () => {
+    let patchCalls = 0;
+    handler = (path, method) => {
+      if (path === "/tokens" && method === "GET") return json([]);
+      if (path === "/passkey/credentials" && method === "GET")
+        return json([{ credential_id: "c1", aaguid: null, name: "Keep", created_at: 1700000000000 }]);
+      if (path.startsWith("/passkey/credentials/") && method === "PATCH") {
+        patchCalls++;
+        return json({ ok: true });
+      }
+      return json({}, 404);
+    };
+    window.prompt = vi.fn(() => null);
+
+    const { container } = render(<Settings flash={vi.fn()} />);
+    await waitFor(() => expect(container.textContent).toContain("Keep"));
+    fireEvent.click(Array.from(container.querySelectorAll<HTMLButtonElement>(".passkey-list button")).find((b) => b.textContent === "Rename")!);
+    expect(patchCalls).toBe(0);
+  });
+
+  it("does not PATCH when the name is unchanged", async () => {
+    let patchCalls = 0;
+    handler = (path, method) => {
+      if (path === "/tokens" && method === "GET") return json([]);
+      if (path === "/passkey/credentials" && method === "GET")
+        return json([{ credential_id: "c1", aaguid: null, name: "Same", created_at: 1700000000000 }]);
+      if (path.startsWith("/passkey/credentials/") && method === "PATCH") {
+        patchCalls++;
+        return json({ ok: true });
+      }
+      return json({}, 404);
+    };
+    window.prompt = vi.fn(() => "Same"); // identical to current
+
+    const { container } = render(<Settings flash={vi.fn()} />);
+    await waitFor(() => expect(container.textContent).toContain("Same"));
+    fireEvent.click(Array.from(container.querySelectorAll<HTMLButtonElement>(".passkey-list button")).find((b) => b.textContent === "Rename")!);
+    expect(patchCalls).toBe(0);
+  });
 });

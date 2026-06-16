@@ -30,6 +30,7 @@ CREATE TABLE webauthn_credentials (
   counter INTEGER NOT NULL DEFAULT 0,
   transports TEXT,
   aaguid TEXT,
+  name TEXT,
   user_id INTEGER NOT NULL,
   created_at INTEGER NOT NULL
 );
@@ -505,5 +506,82 @@ describe("passkey credential management", () => {
   it("DELETE /api/passkey/credentials/:id requires auth", async () => {
     const r = await req("/api/passkey/credentials/anything", { method: "DELETE" });
     expect(r.status).toBe(401);
+  });
+
+  const nameOf = (id: string) =>
+    db.prepare("SELECT name FROM webauthn_credentials WHERE credential_id = ?").bind(id).first<{ name: string | null }>();
+
+  it("PATCH /api/passkey/credentials/:id sets a custom name (trimmed)", async () => {
+    await insertCred("cred-name", null);
+    const h = await authedHeaders();
+    const r = await req("/api/passkey/credentials/cred-name", {
+      method: "PATCH",
+      headers: h,
+      body: JSON.stringify({ name: "  Work laptop  " }),
+    });
+    expect(r.status).toBe(200);
+    expect((await nameOf("cred-name"))?.name).toBe("Work laptop");
+  });
+
+  it("PATCH /api/passkey/credentials/:id clears the name when blank (falls back to AAGUID label)", async () => {
+    await insertCred("cred-clear", null);
+    const h = await authedHeaders();
+    await req("/api/passkey/credentials/cred-clear", {
+      method: "PATCH",
+      headers: h,
+      body: JSON.stringify({ name: "temp" }),
+    });
+    const r = await req("/api/passkey/credentials/cred-clear", {
+      method: "PATCH",
+      headers: h,
+      body: JSON.stringify({ name: "   " }),
+    });
+    expect(r.status).toBe(200);
+    expect((await nameOf("cred-clear"))?.name).toBeNull();
+  });
+
+  it("PATCH /api/passkey/credentials/:id treats a missing name as a clear", async () => {
+    await insertCred("cred-missing", null);
+    const h = await authedHeaders();
+    const r = await req("/api/passkey/credentials/cred-missing", {
+      method: "PATCH",
+      headers: h,
+      body: JSON.stringify({}),
+    });
+    expect(r.status).toBe(200);
+    expect((await nameOf("cred-missing"))?.name).toBeNull();
+  });
+
+  it("PATCH /api/passkey/credentials/:id does not rename another user's credential", async () => {
+    await insertCred("theirs-rename", null, 100, 2);
+    const h = await authedHeaders();
+    const r = await req("/api/passkey/credentials/theirs-rename", {
+      method: "PATCH",
+      headers: h,
+      body: JSON.stringify({ name: "hijack" }),
+    });
+    expect(r.status).toBe(200);
+    expect((await nameOf("theirs-rename"))?.name).toBeNull();
+  });
+
+  it("PATCH /api/passkey/credentials/:id requires auth", async () => {
+    const r = await req("/api/passkey/credentials/anything", {
+      method: "PATCH",
+      body: JSON.stringify({ name: "x" }),
+    });
+    expect(r.status).toBe(401);
+  });
+
+  it("GET /api/passkey/credentials returns the custom name alongside aaguid", async () => {
+    await insertCred("cred-named", "fbfc3007-154e-4ecc-8032-51d60de6b4c2", 100);
+    const h = await authedHeaders();
+    await req("/api/passkey/credentials/cred-named", {
+      method: "PATCH",
+      headers: h,
+      body: JSON.stringify({ name: "My key" }),
+    });
+    const r = await req("/api/passkey/credentials", { headers: h });
+    const list = (await r.json()) as Array<{ credential_id: string; name: string | null }>;
+    expect(list.find((c) => c.credential_id === "cred-named")?.name).toBe("My key");
   });
 });

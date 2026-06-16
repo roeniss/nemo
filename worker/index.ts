@@ -400,9 +400,21 @@ app.use("/api/passkey/credentials", (c, next) =>
 app.get("/api/passkey/credentials", async (c) => {
   const { uid } = getUser(c);
   const { results } = await c.env.DB.prepare(
-    "SELECT credential_id, aaguid, created_at FROM webauthn_credentials WHERE user_id = ? ORDER BY created_at DESC"
+    "SELECT credential_id, aaguid, name, created_at FROM webauthn_credentials WHERE user_id = ? ORDER BY created_at DESC"
   ).bind(uid).all();
   return c.json(results);
+});
+
+// rename one of the authenticated user's passkeys (a blank name clears it, so the
+// UI falls back to the AAGUID-derived authenticator name)
+app.patch("/api/passkey/credentials/:id", async (c) => {
+  const { uid } = getUser(c);
+  const { name } = await c.req.json<{ name?: string }>();
+  const trimmed = typeof name === "string" ? name.trim() : "";
+  await c.env.DB.prepare(
+    "UPDATE webauthn_credentials SET name = ? WHERE credential_id = ? AND user_id = ?"
+  ).bind(trimmed || null, c.req.param("id"), uid).run();
+  return c.json({ ok: true });
 });
 
 // remove one of the authenticated user's registered passkeys

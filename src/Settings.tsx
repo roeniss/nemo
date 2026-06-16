@@ -24,6 +24,16 @@ type PasskeyMeta = {
 const fmtDate = (ms: number) =>
   new Date(ms).toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
 
+// Keyboard shortcuts, surfaced here so they're discoverable (#109). Keep this in
+// sync with the handlers in App.tsx (Cmd/Ctrl+S and the Alt-family).
+const SHORTCUTS: { keys: string; desc: string }[] = [
+  { keys: "Cmd / Ctrl + S", desc: "Save the current memo now" },
+  { keys: "Alt + N", desc: "New memo" },
+  { keys: "Alt + J / Alt + K", desc: "Next / previous memo" },
+  { keys: "Alt + D", desc: "Delete the open memo" },
+  { keys: "Alt + U", desc: "Undo delete · restore a viewed trashed memo" },
+];
+
 export function Settings({ flash, onLogout, admin }: { flash: (msg: string) => void; onLogout?: () => void; admin?: boolean }) {
   const [tokens, setTokens] = useState<TokenMeta[]>([]);
   const [label, setLabel] = useState("");
@@ -125,7 +135,29 @@ export function Settings({ flash, onLogout, admin }: { flash: (msg: string) => v
 
   return (
     <div className="settings">
-      <h2>API tokens</h2>
+      <h2>Keyboard shortcuts</h2>
+      <dl className="shortcut-list">
+        {SHORTCUTS.map((s) => (
+          <div key={s.keys} className="shortcut-row">
+            <dt>
+              {s.keys.split(" / ").map((combo, i) => (
+                <span key={combo}>
+                  {i > 0 && <span className="shortcut-sep"> / </span>}
+                  {combo.split(" + ").map((k, j) => (
+                    <span key={k}>
+                      {j > 0 && <span className="shortcut-plus"> + </span>}
+                      <kbd>{k}</kbd>
+                    </span>
+                  ))}
+                </span>
+              ))}
+            </dt>
+            <dd className="muted">{s.desc}</dd>
+          </div>
+        ))}
+      </dl>
+
+      <h2 className="section-heading">API tokens</h2>
       <p className="muted">
         For external integrations like a Siri Shortcut. Send the token as{" "}
         <code>Authorization: Bearer &lt;token&gt;</code> when calling{" "}

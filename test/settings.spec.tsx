@@ -41,6 +41,24 @@ afterEach(() => {
   cleanup();
 });
 
+describe("Settings — keyboard shortcuts", () => {
+  it("lists the shortcuts with kbd keys and descriptions", async () => {
+    handler = () => json([]); // no tokens / passkeys
+    const { container } = render(<Settings flash={vi.fn()} />);
+    await waitFor(() => expect(container.querySelector(".shortcut-list")).toBeTruthy());
+
+    const rows = container.querySelectorAll(".shortcut-row");
+    expect(rows.length).toBe(5);
+    // each combo key is rendered as a <kbd>
+    const keys = Array.from(container.querySelectorAll(".shortcut-list kbd")).map((k) => k.textContent);
+    expect(keys).toContain("S");
+    expect(keys).toContain("N");
+    expect(keys).toContain("D");
+    expect(keys).toContain("U");
+    expect(container.querySelector(".shortcut-list")?.textContent).toContain("New memo");
+  });
+});
+
 describe("Settings — token list", () => {
   it("lists active tokens with label and usage state", async () => {
     handler = (path, method) =>

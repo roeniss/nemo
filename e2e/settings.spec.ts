@@ -7,7 +7,10 @@ test.describe("Settings — API tokens", () => {
     await expect(page.locator(sel.editor)).toBeVisible();
     await page.click(sel.settingsBtn);
     await expect(page.locator(sel.settings)).toBeVisible();
-    await expect(page.locator(".settings h2").first()).toHaveText("API tokens");
+    await expect(page.locator(".settings h2").first()).toHaveText("Keyboard shortcuts");
+    // the shortcuts reference lists the documented bindings
+    await expect(page.locator(".shortcut-list")).toContainText("New memo");
+    await expect(page.locator(".shortcut-row")).toHaveCount(5);
     // the same button closes settings and returns to the editor
     await page.click(sel.settingsBtn);
     await expect(page.locator(sel.settings)).toBeHidden();

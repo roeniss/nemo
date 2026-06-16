@@ -91,7 +91,7 @@ test.describe("Admin panel", () => {
 
       await page.goto("/#settings");
       await expect(page.locator(sel.settings)).toBeVisible();
-      await expect(page.locator(".settings h2").first()).toHaveText("API tokens");
+      await expect(page.locator('.settings h2:text-is("API tokens")')).toBeVisible();
       // the admin section must not render for a non-admin session
       await expect(page.locator('.settings h2:text-is("Admin: Users")')).toHaveCount(0);
     } finally {

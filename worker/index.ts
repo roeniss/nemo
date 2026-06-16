@@ -9,8 +9,9 @@ import {
 } from "@simplewebauthn/server";
 import type { AuthenticatorTransportFuture } from "@simplewebauthn/server";
 import type { Context } from "hono";
+import { registerMcp } from "./mcp";
 
-type Bindings = {
+export type Bindings = {
   DB: D1Database;
   JWT_SECRET: string;
   TURNSTILE_SECRET?: string; // bot protection — enforced only when set
@@ -19,8 +20,9 @@ type Bindings = {
   HISTORY_SESSION_MS?: string;
 };
 
-type Variables = {
+export type Variables = {
   extUserId: number;
+  mcpUserId: number; // set by the MCP Bearer middleware (worker/mcp.ts)
   jwtPayload: Record<string, unknown>;
 };
 
@@ -476,6 +478,10 @@ app.post("/api/ext/memos", async (c) => {
 // any other (authenticated) method/path under the integration surface — keeps
 // the unified { response } shape instead of Hono's default text 404.
 app.all("/api/ext/*", (c) => c.json({ response: "not found" }, 404));
+
+// Remote MCP server (/api/mcp) — Bearer-authenticated, registered before the
+// cookie-JWT gate so it runs its own token auth. See worker/mcp.ts.
+registerMcp(app, { hashToken, titleFrom });
 
 // gate everything under /api except the public auth + /api/ext routes. The public
 // routes (/api/login, /api/logout, /api/ext/*, /api/passkey/auth/*) are all

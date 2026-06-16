@@ -17,6 +17,7 @@ type TokenMeta = {
 type PasskeyMeta = {
   credential_id: string;
   aaguid?: string | null;
+  name?: string | null;
   created_at: number;
 };
 
@@ -55,6 +56,19 @@ export function Settings({ flash, onLogout, admin }: { flash: (msg: string) => v
 
   async function deletePasskey(credentialId: string) {
     await api(`/passkey/credentials/${encodeURIComponent(credentialId)}`, { method: "DELETE" });
+    await loadPasskeys();
+  }
+
+  // rename a passkey; a blank/cancelled prompt leaves it unchanged, an empty
+  // string clears the custom name (falling back to the AAGUID-derived label)
+  async function renamePasskey(pk: PasskeyMeta) {
+    const current = pk.name ?? "";
+    const next = prompt("Passkey name:", current);
+    if (next === null || next.trim() === current) return;
+    await api(`/passkey/credentials/${encodeURIComponent(pk.credential_id)}`, {
+      method: "PATCH",
+      body: JSON.stringify({ name: next.trim() }),
+    });
     await loadPasskeys();
   }
 
@@ -164,8 +178,11 @@ export function Settings({ flash, onLogout, admin }: { flash: (msg: string) => v
       <ul className="passkey-list">
         {passkeys.map((pk) => (
           <li key={pk.credential_id}>
-            <span className="token-label">{aaguidToName(pk.aaguid)}</span>
+            <span className="token-label">{pk.name?.trim() || aaguidToName(pk.aaguid)}</span>
             <span className="muted">Registered: {fmtDate(pk.created_at)}</span>
+            <button className="ghost" onClick={() => renamePasskey(pk)}>
+              Rename
+            </button>
             <button className="del" onClick={() => deletePasskey(pk.credential_id)}>
               Delete
             </button>

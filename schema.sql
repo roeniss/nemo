@@ -57,6 +57,7 @@ CREATE TABLE IF NOT EXISTS webauthn_credentials (
   counter INTEGER NOT NULL DEFAULT 0,
   transports TEXT,                    -- JSON array of transport hints
   aaguid TEXT,                        -- authenticator make/model id (for friendly names)
+  name TEXT,                          -- user-chosen label (falls back to the AAGUID name)
   user_id INTEGER NOT NULL,           -- owning user
   created_at INTEGER NOT NULL
 );

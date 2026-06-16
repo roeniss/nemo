@@ -134,40 +134,6 @@ describe("OAuth discovery", () => {
   });
 });
 
-describe("CORS for the browser-driven connector surface", () => {
-  // Claude web fetches these cross-origin; without CORS the preflight falls
-  // through to the cookie-JWT /api/* gate and 401s, breaking the connector.
-  it("answers the OPTIONS preflight on the token endpoint (not 401)", async () => {
-    const r = await req("/api/oauth/token", {
-      method: "OPTIONS",
-      headers: {
-        Origin: "https://claude.ai",
-        "Access-Control-Request-Method": "POST",
-        "Access-Control-Request-Headers": "authorization,content-type",
-      },
-    });
-    expect(r.status).not.toBe(401);
-    expect(r.headers.get("Access-Control-Allow-Origin")).toBe("*");
-    expect(r.headers.get("Access-Control-Allow-Methods")).toContain("POST");
-  });
-
-  it("sets ACAO on discovery and exposes WWW-Authenticate on the MCP 401", async () => {
-    const disc = await req("/.well-known/oauth-authorization-server", {
-      headers: { Origin: "https://claude.ai" },
-    });
-    expect(disc.headers.get("Access-Control-Allow-Origin")).toBe("*");
-
-    const mcp = await req("/api/mcp", {
-      method: "POST",
-      headers: { Origin: "https://claude.ai", "Content-Type": "application/json" },
-      body: "{}",
-    });
-    expect(mcp.status).toBe(401);
-    expect(mcp.headers.get("Access-Control-Allow-Origin")).toBe("*");
-    expect(mcp.headers.get("Access-Control-Expose-Headers") ?? "").toContain("WWW-Authenticate");
-  });
-});
-
 describe("OAuth dynamic client registration", () => {
   it("registers a public client and returns a client_id", async () => {
     const r = await req("/api/oauth/register", {

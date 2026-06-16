@@ -1,6 +1,7 @@
 import { Hono } from "hono";
 import { sign, jwt } from "hono/jwt";
 import { setCookie, deleteCookie } from "hono/cookie";
+import { cors } from "hono/cors";
 import {
   generateRegistrationOptions,
   verifyRegistrationResponse,
@@ -128,6 +129,27 @@ export async function verifyPassword(password: string, stored: string): Promise<
 }
 
 const app = new Hono<{ Bindings: Bindings; Variables: Variables }>();
+
+// --- CORS for the browser-driven connector surface ----------------------
+// Claude *web* drives the MCP connector from its own origin via cross-origin
+// fetch, so the discovery, OAuth, and MCP endpoints need CORS — without it the
+// browser's preflight (OPTIONS) falls through to the cookie-JWT /api/* gate and
+// is rejected 401, breaking the flow ("Authorization with the MCP server
+// failed"). These endpoints authenticate with PKCE / Bearer, never a
+// cross-origin cookie, so a wildcard origin (no credentials) is correct — and
+// robust to Claude changing its web origin. WWW-Authenticate is exposed so the
+// browser client can read the 401 challenge and locate the resource metadata.
+// Registered before the routes and the JWT gate so it answers preflights first.
+const connectorCors = cors({
+  origin: "*",
+  allowMethods: ["GET", "POST", "OPTIONS"],
+  allowHeaders: ["Authorization", "Content-Type", "Mcp-Session-Id", "Mcp-Protocol-Version"],
+  exposeHeaders: ["WWW-Authenticate", "Mcp-Session-Id"],
+  maxAge: 86400,
+});
+app.use("/.well-known/*", connectorCors);
+app.use("/api/oauth/*", connectorCors);
+app.use("/api/mcp", connectorCors);
 
 // --- user helper --------------------------------------------------------
 type Ctx = Context<{ Bindings: Bindings; Variables: Variables }>;

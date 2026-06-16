@@ -57,6 +57,12 @@ beforeEach(() => {
   localStorage.removeItem("qm-authed");
   vi.mocked(startAuthentication).mockReset();
 
+  // default: a platform authenticator is available, so the mount effect proceeds
+  // to the immediate passkey prompt. Individual tests override this.
+  (window as unknown as { PublicKeyCredential: unknown }).PublicKeyCredential = {
+    isUserVerifyingPlatformAuthenticatorAvailable: vi.fn().mockResolvedValue(true),
+  };
+
   window.matchMedia = ((q: string) => ({
     matches: false,
     media: q,
@@ -100,6 +106,38 @@ describe("passkey conditional UI", () => {
         expect.not.objectContaining({ useBrowserAutofill: true })
       );
     });
+  });
+
+  it("does NOT auto-prompt when no platform authenticator is available", async () => {
+    (window as unknown as { PublicKeyCredential: unknown }).PublicKeyCredential = {
+      isUserVerifyingPlatformAuthenticatorAvailable: vi.fn().mockResolvedValue(false),
+    };
+    const { fetchImpl } = makeServer();
+    globalThis.fetch = fetchImpl as unknown as typeof fetch;
+
+    const { default: App } = await import("../src/App");
+    const { container } = render(<App />);
+    await waitFor(() => expect(container.querySelector(".login")).toBeTruthy());
+
+    // give any (unwanted) async prompt a chance to fire, then assert it didn't
+    await new Promise((r) => setTimeout(r, 10));
+    expect(vi.mocked(startAuthentication)).not.toHaveBeenCalled();
+    expect(
+      fetchImpl.mock.calls.filter((c) => String(c[0]).includes("/passkey/auth/options"))
+    ).toHaveLength(0);
+  });
+
+  it("does NOT auto-prompt when WebAuthn is unsupported (no PublicKeyCredential)", async () => {
+    delete (window as unknown as { PublicKeyCredential?: unknown }).PublicKeyCredential;
+    const { fetchImpl } = makeServer();
+    globalThis.fetch = fetchImpl as unknown as typeof fetch;
+
+    const { default: App } = await import("../src/App");
+    const { container } = render(<App />);
+    await waitFor(() => expect(container.querySelector(".login")).toBeTruthy());
+
+    await new Promise((r) => setTimeout(r, 10));
+    expect(vi.mocked(startAuthentication)).not.toHaveBeenCalled();
   });
 
   it("silently swallows NotAllowedError (user cancelled) and keeps login form usable", async () => {

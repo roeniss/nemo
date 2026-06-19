@@ -54,8 +54,6 @@ export const sel = {
   importBtn: ".topbar .import",
   downloadBtn: ".topbar .download",
   fileInput: 'input.file-input',
-  folderInput: 'input.folder-input',
-  importFolderBtn: ".topbar .import-folder",
   search: ".search",
   list: ".memo-list li",
   activeTitle: ".memo-list li.active .memo-title",

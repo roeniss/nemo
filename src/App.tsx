@@ -34,6 +34,11 @@ import { useImport } from "./useImport";
 // public site key (build-time). Empty = widget dormant until keys are configured.
 const TURNSTILE_SITEKEY = import.meta.env.VITE_TURNSTILE_SITEKEY || "";
 
+// resizable sidebar bounds (px); the drag clamps to this range
+const SIDEBAR_MIN = 160;
+const SIDEBAR_MAX = 480;
+const SIDEBAR_DEFAULT = 240;
+
 declare global {
   interface Window {
     turnstile?: {
@@ -86,6 +91,16 @@ export default function App() {
   const [currentId, setCurrentId] = useState<number | null>(null);
   const [content, setContent] = useState("");
   const [sidebar, setSidebar] = useState(() => window.innerWidth > 640); // closed by default on mobile
+  // sidebar width, drag-resizable via the handle on its right edge and persisted
+  // across reloads (qm-sidebar-width). Clamp on read so a stale/garbage value
+  // can't wedge the layout.
+  const [sidebarWidth, setSidebarWidth] = useState(() => {
+    const saved = Number(localStorage.getItem("qm-sidebar-width"));
+    return saved >= SIDEBAR_MIN && saved <= SIDEBAR_MAX ? saved : SIDEBAR_DEFAULT;
+  });
+  // a file dragged anywhere over the window shows a full-screen drop overlay so
+  // it's obvious a drop will be accepted (the drop itself is handled at window level)
+  const [dragging, setDragging] = useState(false);
   // theme preference: "light" | "dark" follow the explicit choice, "system"
   // tracks the OS. Stored in qm-theme; the boot script in index.html already
   // resolved it to data-theme before paint.
@@ -146,6 +161,11 @@ export default function App() {
   // file import (each file → its own memo), image paste (base64 embed), and .md export
   const { importFile, pasteImage, downloadMemo } =
     useImport({ content, currentIdRef, editorRef, onEdit, flash, setMemos });
+  // latest importFile for the once-registered window drop listener (same
+  // ref-for-latest pattern as openMemo below)
+  const importFileRef = useRef(importFile);
+  importFileRef.current = importFile;
+  const dragDepth = useRef(0); // nested dragenter/dragleave depth for the drop overlay
   // always-latest openMemo, so the hashchange listener (registered once) never
   // calls a stale closure. Assigned to openMemo synchronously on every render
   // (below), before any listener can fire — so .current is always set by the
@@ -939,6 +959,71 @@ export default function App() {
     localStorage.setItem("qm-theme", themePref);
   }, [themePref]);
 
+  // persist the sidebar width across reloads
+  useEffect(() => {
+    localStorage.setItem("qm-sidebar-width", String(sidebarWidth));
+  }, [sidebarWidth]);
+
+  // drag a file anywhere over the window → show the drop overlay and accept the
+  // drop (registered once; reads the latest importFile via the ref). Centralised
+  // here rather than on the editor so the whole window is a drop target. A depth
+  // counter absorbs the nested dragenter/dragleave pairs that fire as the pointer
+  // crosses child elements, so the overlay doesn't flicker mid-drag.
+  useEffect(() => {
+    const isFiles = (e: DragEvent) => e.dataTransfer?.types?.includes("Files");
+    function onEnter(e: DragEvent) {
+      if (!isFiles(e)) return;
+      dragDepth.current += 1;
+      setDragging(true);
+    }
+    function onOver(e: DragEvent) {
+      if (isFiles(e)) e.preventDefault(); // required, or the browser won't fire `drop`
+    }
+    function onLeave(e: DragEvent) {
+      if (!isFiles(e)) return;
+      dragDepth.current -= 1;
+      if (dragDepth.current <= 0) {
+        dragDepth.current = 0;
+        setDragging(false);
+      }
+    }
+    function onDrop(e: DragEvent) {
+      dragDepth.current = 0;
+      setDragging(false);
+      const files = e.dataTransfer?.files;
+      if (files && files.length) {
+        e.preventDefault(); // don't let the browser navigate to the file
+        importFileRef.current(files);
+      }
+    }
+    window.addEventListener("dragenter", onEnter);
+    window.addEventListener("dragover", onOver);
+    window.addEventListener("dragleave", onLeave);
+    window.addEventListener("drop", onDrop);
+    return () => {
+      window.removeEventListener("dragenter", onEnter);
+      window.removeEventListener("dragover", onOver);
+      window.removeEventListener("dragleave", onLeave);
+      window.removeEventListener("drop", onDrop);
+    };
+  }, []);
+
+  // drag the sidebar's right edge: track the pointer until mouseup, clamping the
+  // width to [SIDEBAR_MIN, SIDEBAR_MAX]. The sidebar starts at x=0, so clientX is
+  // the width.
+  function startSidebarResize(e: { preventDefault: () => void }) {
+    e.preventDefault();
+    function onMove(ev: MouseEvent) {
+      setSidebarWidth(Math.min(SIDEBAR_MAX, Math.max(SIDEBAR_MIN, ev.clientX)));
+    }
+    function onUp() {
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+    }
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+  }
+
   // when following the system, react to OS theme changes live
   useEffect(() => {
     const mq = matchMedia("(prefers-color-scheme: dark)");
@@ -1152,8 +1237,13 @@ export default function App() {
 
   return (
     <div className="app">
+      {dragging && (
+        <div className="drop-overlay" aria-hidden="true">
+          <span>Drop files to create memos</span>
+        </div>
+      )}
       {sidebar && (
-        <aside className="sidebar">
+        <aside className="sidebar" style={{ width: sidebarWidth }}>
           <div className="side-tabs">
             <button
               className={view === "memos" ? "tab active" : "tab"}
@@ -1258,6 +1348,15 @@ export default function App() {
             </ul>
           )}
         </aside>
+      )}
+      {sidebar && (
+        <div
+          className="sidebar-resize"
+          role="separator"
+          aria-orientation="vertical"
+          aria-label="Resize sidebar"
+          onMouseDown={startSidebarResize}
+        />
       )}
 
       <div className="main">
@@ -1437,16 +1536,6 @@ export default function App() {
                 // a pasted image is embedded inline as base64; everything else
                 // falls through to the normal text paste
                 if (pasteImage(e.clipboardData)) e.preventDefault();
-              }}
-              onDragOver={(e) => {
-                if (e.dataTransfer?.types?.includes("Files")) e.preventDefault(); // allow drop
-              }}
-              onDrop={(e) => {
-                const files = e.dataTransfer?.files;
-                if (files && files.length) {
-                  e.preventDefault(); // don't let the browser navigate to the file
-                  importFile(files); // each dropped file → its own new memo
-                }
               }}
               placeholder="# Title&#10;&#10;Write in markdown…  (drop a file for a new memo · paste an image to embed)"
               spellcheck={false}

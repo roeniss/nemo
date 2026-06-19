@@ -1112,14 +1112,109 @@ describe("import, download, paste, drop", () => {
       { timeout: 3000 }
     );
 
-    // drop a text file
+    // drop a text file anywhere on the window (drag/drop is handled window-level)
     const dropFile = new File(["# dropped\n\ndropped body"], "drop.md", { type: "text/markdown" });
     const dt = { files: [dropFile], types: ["Files"] } as unknown as DataTransfer;
     await act(async () => {
-      fireEvent.dragOver(ta, { dataTransfer: dt });
-      fireEvent.drop(ta, { dataTransfer: dt });
+      fireEvent.dragOver(window, { dataTransfer: dt });
+      fireEvent.drop(window, { dataTransfer: dt });
     });
     await waitFor(() => expect(server.memos.some((m) => m.content.includes("dropped body"))).toBe(true));
+  });
+
+  it("shows a drop overlay while dragging files and accepts the drop", async () => {
+    authedBoot();
+    const { container } = render(<App />);
+    await waitFor(() => expect(container.querySelector("textarea.editor")).toBeTruthy());
+    const files = { types: ["Files"], files: [] } as unknown as DataTransfer;
+    const nonFiles = { types: ["text/plain"] } as unknown as DataTransfer;
+    const overlay = () => container.querySelector(".drop-overlay");
+
+    // a non-file drag (text selection, etc.) never triggers the overlay
+    await act(async () => {
+      fireEvent.dragEnter(window, { dataTransfer: nonFiles });
+      fireEvent.dragOver(window, { dataTransfer: nonFiles });
+      fireEvent.dragLeave(window, { dataTransfer: nonFiles });
+    });
+    expect(overlay()).toBeFalsy();
+
+    // dragging files in shows the overlay; nested enters (crossing child elements)
+    // keep it up until they balance out
+    await act(async () => {
+      fireEvent.dragEnter(window, { dataTransfer: files }); // depth 1
+      fireEvent.dragEnter(window, { dataTransfer: files }); // depth 2 (entered a child)
+      fireEvent.dragOver(window, { dataTransfer: files });
+    });
+    expect(overlay()).toBeTruthy();
+    await act(async () => {
+      fireEvent.dragLeave(window, { dataTransfer: files }); // depth 2 -> 1, stays up
+    });
+    expect(overlay()).toBeTruthy();
+    await act(async () => {
+      fireEvent.dragLeave(window, { dataTransfer: files }); // depth 1 -> 0, clears
+    });
+    expect(overlay()).toBeFalsy();
+
+    // a drop with no files just clears the overlay (no import)
+    const before = server.memos.length;
+    await act(async () => {
+      fireEvent.dragEnter(window, { dataTransfer: files });
+      fireEvent.drop(window, { dataTransfer: { files: [] } as unknown as DataTransfer });
+    });
+    expect(overlay()).toBeFalsy();
+    expect(server.memos.length).toBe(before);
+  });
+
+  it("resizes the sidebar by dragging the handle and persists the width", async () => {
+    authedBoot();
+    const { container } = render(<App />);
+    await waitFor(() => expect(container.querySelector(".sidebar")).toBeTruthy());
+    const handle = container.querySelector(".sidebar-resize") as HTMLElement;
+    const aside = container.querySelector(".sidebar") as HTMLElement;
+
+    // drag to a width within bounds
+    await act(async () => {
+      fireEvent.mouseDown(handle);
+      fireEvent.mouseMove(window, { clientX: 300 });
+      fireEvent.mouseUp(window);
+    });
+    expect(aside.style.width).toBe("300px");
+    expect(localStorage.getItem("qm-sidebar-width")).toBe("300");
+
+    // clamps below the minimum and above the maximum
+    await act(async () => {
+      fireEvent.mouseDown(handle);
+      fireEvent.mouseMove(window, { clientX: 10 }); // < SIDEBAR_MIN
+      fireEvent.mouseUp(window);
+    });
+    expect(aside.style.width).toBe("160px");
+    await act(async () => {
+      fireEvent.mouseDown(handle);
+      fireEvent.mouseMove(window, { clientX: 9999 }); // > SIDEBAR_MAX
+      fireEvent.mouseUp(window);
+    });
+    expect(aside.style.width).toBe("480px");
+
+    // after mouseup, further movement no longer resizes (listener removed)
+    await act(async () => {
+      fireEvent.mouseMove(window, { clientX: 200 });
+    });
+    expect(aside.style.width).toBe("480px");
+  });
+
+  it("restores a persisted sidebar width on boot, ignoring out-of-range values", async () => {
+    authedBoot();
+    localStorage.setItem("qm-sidebar-width", "320");
+    const { container, unmount } = render(<App />);
+    await waitFor(() => expect(container.querySelector(".sidebar")).toBeTruthy());
+    expect((container.querySelector(".sidebar") as HTMLElement).style.width).toBe("320px");
+    unmount();
+
+    // a garbage value falls back to the default width
+    localStorage.setItem("qm-sidebar-width", "99999");
+    const { container: c2 } = render(<App />);
+    await waitFor(() => expect(c2.querySelector(".sidebar")).toBeTruthy());
+    expect((c2.querySelector(".sidebar") as HTMLElement).style.width).toBe("240px");
   });
 });
 

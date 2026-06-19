@@ -55,22 +55,13 @@ Authenticate with `Authorization: Bearer <token>`. Tokens are managed from the
 in-app **⚙ Settings** page (sidebar): *Generate token* shows the plaintext **once**
 (only a SHA-256 hash is stored — it can't be recovered), and *Revoke* disables it.
 
-**curl** — a literal string:
+**curl** (use `-d "$(jq -Rs '{content: .}' < note.md)"` to send a file's contents instead of a literal):
 
 ```bash
 curl -X POST https://nemo.roeni.ss/api/ext/memos \
   -H "Authorization: Bearer nemo_xxxxxxxx" \
   -H "content-type: application/json" \
   -d '{"content":"TODO: make a shower"}'
-```
-
-**curl** — upload a file's contents (`jq -Rs` JSON-encodes the whole file):
-
-```bash
-curl -X POST https://nemo.roeni.ss/api/ext/memos \
-  -H "Authorization: Bearer nemo_xxxxxxxx" \
-  -H "content-type: application/json" \
-  -d "$(jq -Rs '{content: .}' < note.md)"
 ```
 
 **Siri Shortcut** ("Hey Siri, make a new note"):

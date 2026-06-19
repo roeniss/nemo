@@ -757,38 +757,9 @@ app.put("/api/memos/:id", async (c) => {
   return c.json({ ok: true, title, updated_at: now });
 });
 
-// history: list a memo's preserved past states, newest first (no content — the
-// list stays light; fetch a single version's content via :versionId)
-app.get("/api/memos/:id/versions", async (c) => {
-  const { uid } = getUser(c);
-  // Only list versions for memos owned by this user
-  const memo = await c.env.DB.prepare(
-    "SELECT id FROM memos WHERE id = ? AND user_id = ?"
-  ).bind(c.req.param("id"), uid).first();
-  if (!memo) return c.json([]);
-  const { results } = await c.env.DB.prepare(
-    "SELECT id, title, created_at FROM memo_versions WHERE memo_id = ? ORDER BY created_at DESC"
-  )
-    .bind(c.req.param("id"))
-    .all();
-  return c.json(results);
-});
-
-app.get("/api/memos/:id/versions/:versionId", async (c) => {
-  const { uid } = getUser(c);
-  // Check memo ownership
-  const memo = await c.env.DB.prepare(
-    "SELECT id FROM memos WHERE id = ? AND user_id = ?"
-  ).bind(c.req.param("id"), uid).first();
-  if (!memo) return c.json({ error: "not found" }, 404);
-  const row = await c.env.DB.prepare(
-    "SELECT id, memo_id, title, content, created_at FROM memo_versions WHERE id = ? AND memo_id = ?"
-  )
-    .bind(c.req.param("versionId"), c.req.param("id"))
-    .first();
-  if (!row) return c.json({ error: "not found" }, 404);
-  return c.json(row);
-});
+// Snapshots are still written on save (see PUT above) and kept in memo_versions
+// for recoverability, but there are no read endpoints — the data is queryable
+// directly from D1 if ever needed.
 
 app.delete("/api/memos/:id", async (c) => {
   const { uid } = getUser(c);

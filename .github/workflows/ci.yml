@@ -55,9 +55,6 @@ jobs:
           # webServer command (db:seed-test-user, using TEST_USER/TEST_PASS).
           # Only JWT_SECRET (cookie signing) is still needed in .dev.vars.
           printf 'JWT_SECRET=%s\n' "ci-jwt-secret-not-real" > .dev.vars
-          # short history thresholds so the session-snapshot e2e can cross a
-          # "session boundary" with a brief wait instead of the 1h prod default
-          printf 'HISTORY_GAP_MS=1000\nHISTORY_SESSION_MS=1000\n' >> .dev.vars
       - name: Run e2e
         run: npm run test:e2e
       - name: Upload report on failure

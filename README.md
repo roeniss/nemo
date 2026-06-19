@@ -12,9 +12,10 @@ A minimal split-pane markdown memo app — left editor / right preview. Single C
 
 ## History (session snapshots)
 
-Every memo keeps a lightweight version history, recorded server-side — no UI yet,
-but the data is captured and queryable. The model is **session snapshots**: when a
-new editing session begins, the prior session's final state is preserved into the
+Every memo keeps a lightweight version history, recorded server-side. There are
+no read endpoints — the data is captured for recoverability and, if ever needed,
+queryable directly from D1. The model is **session snapshots**: when a new
+editing session begins, the prior session's final state is preserved into the
 `memo_versions` table. A "new session" is detected on save (`PUT /api/memos/:id`)
 as either:
 
@@ -24,12 +25,8 @@ as either:
 So a memo accrues at most ~one snapshot per hour. Empty or unchanged saves are
 skipped, and a hard `?purge=1` delete drops a memo's history with it.
 
-Both thresholds default to 1h; override them (e.g. for local dev / e2e) via the
+Both thresholds default to 1h; override them (e.g. for local dev) via the
 `HISTORY_GAP_MS` / `HISTORY_SESSION_MS` worker vars in `.dev.vars`.
-
-Read endpoints (auth-protected):
-- `GET /api/memos/:id/versions` — list snapshots (newest first; no content)
-- `GET /api/memos/:id/versions/:versionId` — a single snapshot's full content
 
 ## External API
 

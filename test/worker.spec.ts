@@ -390,44 +390,16 @@ describe("history (session snapshots)", () => {
     expect(await versions(c.id)).toHaveLength(0);
   });
 
-  it("lists versions (no content) and serves a single version's content; purge clears them", async () => {
+  it("purge clears a memo's snapshots along with it", async () => {
     const h = await authedHeaders();
     const c = await create(h);
     const old = Date.now() - 2 * HOUR;
     await backdate(c.id, old, old, "# Old");
     await put(c.id, h, { content: "# New", base: old });
-
-    const listed = await (await req(`/api/memos/${c.id}/versions`, { headers: h })).json();
-    expect(listed).toHaveLength(1);
-    expect(listed[0].title).toBe("Old");
-    expect(listed[0].content).toBeUndefined(); // list stays light
-
-    const one = await (
-      await req(`/api/memos/${c.id}/versions/${listed[0].id}`, { headers: h })
-    ).json();
-    expect(one.content).toBe("# Old");
+    expect(await versions(c.id)).toHaveLength(1);
 
     await req(`/api/memos/${c.id}?purge=1`, { method: "DELETE", headers: h });
-    expect(await (await req(`/api/memos/${c.id}/versions`, { headers: h })).json()).toHaveLength(0);
-  });
-
-  it("404s a single-version fetch for a non-existent versionId", async () => {
-    const h = await authedHeaders();
-    const c = await create(h);
-    const old = Date.now() - 2 * HOUR;
-    await backdate(c.id, old, old, "# Old");
-    await put(c.id, h, { content: "# New", base: old });
-    // a versionId that doesn't exist for this memo → GET /versions/:versionId 404s
-    const r = await req(`/api/memos/${c.id}/versions/99999`, { headers: h });
-    expect(r.status).toBe(404);
-    expect(await r.json()).toEqual({ error: "not found" });
-  });
-
-  it("404s a version fetch for a non-existent memo", async () => {
-    const h = await authedHeaders();
-    const r = await req("/api/memos/99999/versions/1", { headers: h });
-    expect(r.status).toBe(404);
-    expect(await r.json()).toEqual({ error: "not found" });
+    expect(await versions(c.id)).toHaveLength(0);
   });
 });
 

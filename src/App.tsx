@@ -430,7 +430,7 @@ export default function App() {
     }
   }
 
-  // user-initiated "new memo" (toolbar button / ⌥C): unlike the boot-time
+  // user-initiated "new memo" (toolbar button / ⌘K): unlike the boot-time
   // newMemo() calls, this also leaves the Settings/Trash views so the fresh memo
   // is actually shown. Kept separate so boot doesn't force the view (which would
   // race with restoring the Trash/Settings tab on load).
@@ -864,14 +864,11 @@ export default function App() {
   // currentId/content/undo/view/viewing as deps, rather than in the ref-based
   // Alt+J/K effect below):
   //   Cmd/Ctrl+S — flush the pending debounce and save immediately
-  //   Alt+C — new memo (newMemo flushes the in-progress one first)
+  //   Alt+N — new memo (newMemo flushes the in-progress one first)
   //   Alt+D — trash the current memo (with the 6s undo)
-  //   Alt+Z — undo the last delete, or restore the trashed memo being viewed
+  //   Alt+U — undo the last delete, or restore the trashed memo being viewed
   // The Alt branch uses e.code (physical key) because macOS Option+letter composes
-  // a special character into e.key; preventDefault stops that character — EXCEPT
-  // for the five Option dead keys (E´ I^ U¨ N˜ `), whose diacritic commits later
-  // via a non-cancelable composition event. So these shortcuts deliberately avoid
-  // N and U (which were Alt+N/Alt+U and leaked "˜"/"¨" into the editor, #118).
+  // a special character into e.key; preventDefault also stops that character.
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
       if ((e.metaKey || e.ctrlKey) && !e.altKey) {
@@ -886,20 +883,24 @@ export default function App() {
         return;
       }
       if (!e.altKey || e.metaKey || e.ctrlKey) return;
-      // These are reserved shortcuts, so always preventDefault on a match — even
-      // when the action is a no-op — or the Option char (ç/∂/Ω) leaks into the editor.
-      if (e.code === "KeyC") {
+      if (e.code === "KeyN") {
         e.preventDefault();
         newMemoFromUI();
       } else if (e.code === "KeyD") {
-        e.preventDefault();
         // delete the open memo (memos view only; trash rows aren't "current")
-        if (view === "memos" && currentId != null) deleteMemo(currentId);
-      } else if (e.code === "KeyZ") {
-        e.preventDefault();
+        if (view === "memos" && currentId != null) {
+          e.preventDefault();
+          deleteMemo(currentId);
+        }
+      } else if (e.code === "KeyU") {
         // undo the last delete if one is pending, else restore the viewed trash memo
-        if (undo) undoDelete();
-        else if (view === "trash" && viewing) restoreMemo(viewing.id);
+        if (undo) {
+          e.preventDefault();
+          undoDelete();
+        } else if (view === "trash" && viewing) {
+          e.preventDefault();
+          restoreMemo(viewing.id);
+        }
       }
     }
     window.addEventListener("keydown", onKey);
@@ -1310,7 +1311,7 @@ export default function App() {
                   </li>
                 )}
               </ul>
-              <p className="shortcut-hint">Alt+J / Alt+K to navigate · Alt+C new · Alt+D delete</p>
+              <p className="shortcut-hint">Alt+J / Alt+K to navigate · Alt+N new · Alt+D delete</p>
             </>
           ) : (
             <ul className="memo-list">
@@ -1461,7 +1462,7 @@ export default function App() {
                 <line x1="12" y1="3" x2="12" y2="15" />
               </svg>
             </button>
-            <button className="new-memo icon-btn" onClick={newMemoFromUI} title="New memo (⌥C)" aria-label="New memo">
+            <button className="new-memo icon-btn" onClick={newMemoFromUI} title="New memo (⌘K)" aria-label="New memo">
               <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
                 <line x1="12" y1="5" x2="12" y2="19" />
                 <line x1="5" y1="12" x2="19" y2="12" />

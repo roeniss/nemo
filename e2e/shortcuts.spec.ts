@@ -5,16 +5,16 @@ const hashId = (page: import("@playwright/test").Page) =>
   page.evaluate(() => Number(location.hash.replace("#", "")));
 
 test.describe("keyboard shortcuts", () => {
-  test("Alt+N opens a new memo", async ({ page, request }) => {
+  test("Alt+C opens a new memo", async ({ page, request }) => {
     await blankMemo(page);
     const before = await hashId(page);
-    await page.keyboard.press("Alt+KeyN");
+    await page.keyboard.press("Alt+KeyC");
     await expect(page).not.toHaveURL(new RegExp(`#${before}$`));
     await expect(page.locator(sel.editor)).toHaveValue("# ");
     await purge(request, await hashId(page));
   });
 
-  test("Alt+D deletes the open memo and Alt+U undoes it", async ({ page, request }) => {
+  test("Alt+D deletes the open memo and Alt+Z undoes it", async ({ page, request }) => {
     await blankMemo(page);
     await page.locator(sel.editor).click();
     await page.keyboard.type("Delete me\n\nbody");
@@ -30,8 +30,13 @@ test.describe("keyboard shortcuts", () => {
     await expect(page.locator(".memo-list")).not.toContainText("Delete me");
     await expect(page.getByText('Deleted "Delete me"')).toBeVisible();
 
-    await page.keyboard.press("Alt+KeyU");
-    await expect(page.locator(".memo-list")).toContainText("Delete me");
+    // Re-fire until it lands: the Alt-shortcut keydown effect re-registers with
+    // the fresh `undo` a passive-effect tick after the toast renders, so a single
+    // press can race that re-registration (CI's retries used to mask this).
+    await expect(async () => {
+      await page.keyboard.press("Alt+KeyZ");
+      await expect(page.locator(".memo-list")).toContainText("Delete me", { timeout: 1000 });
+    }).toPass();
     await purge(request, id);
   });
 

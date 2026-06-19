@@ -28,10 +28,10 @@ const fmtDate = (ms: number) =>
 // sync with the handlers in App.tsx (Cmd/Ctrl+S and the Alt-family).
 const SHORTCUTS: { keys: string; desc: string }[] = [
   { keys: "Cmd / Ctrl + S", desc: "Save the current memo now" },
-  { keys: "Alt + N", desc: "New memo" },
+  { keys: "Alt + C", desc: "New memo" },
   { keys: "Alt + J / Alt + K", desc: "Next / previous memo" },
   { keys: "Alt + D", desc: "Delete the open memo" },
-  { keys: "Alt + U", desc: "Undo delete · restore a viewed trashed memo" },
+  { keys: "Alt + Z", desc: "Undo delete · restore a viewed trashed memo" },
 ];
 
 export function Settings({ flash, onLogout, admin }: { flash: (msg: string) => void; onLogout?: () => void; admin?: boolean }) {

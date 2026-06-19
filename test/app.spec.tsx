@@ -880,6 +880,16 @@ describe("keyboard shortcuts", () => {
     });
   });
 
+  it("Alt+Z preventDefaults even with nothing to undo, so Option+Z's 'Ω' never lands (#118)", async () => {
+    authedBoot();
+    const { container } = render(<App />);
+    await waitFor(() => expect(container.querySelector("textarea.editor")).toBeTruthy());
+    // memos view, no pending undo → Alt+Z is a no-op, but must still cancel the
+    // keydown's default action (else the Option+Z character would be typed in)
+    const prevented = !fireEvent.keyDown(window, { code: "KeyZ", altKey: true });
+    expect(prevented).toBe(true);
+  });
+
   it("Alt+J / Alt+K navigate between memos", async () => {
     authedBoot();
     server.seed({ title: "One", content: "# One" });

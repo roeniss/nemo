@@ -886,24 +886,20 @@ export default function App() {
         return;
       }
       if (!e.altKey || e.metaKey || e.ctrlKey) return;
+      // These are reserved shortcuts, so always preventDefault on a match — even
+      // when the action is a no-op — or the Option char (ç/∂/Ω) leaks into the editor.
       if (e.code === "KeyC") {
         e.preventDefault();
         newMemoFromUI();
       } else if (e.code === "KeyD") {
+        e.preventDefault();
         // delete the open memo (memos view only; trash rows aren't "current")
-        if (view === "memos" && currentId != null) {
-          e.preventDefault();
-          deleteMemo(currentId);
-        }
+        if (view === "memos" && currentId != null) deleteMemo(currentId);
       } else if (e.code === "KeyZ") {
+        e.preventDefault();
         // undo the last delete if one is pending, else restore the viewed trash memo
-        if (undo) {
-          e.preventDefault();
-          undoDelete();
-        } else if (view === "trash" && viewing) {
-          e.preventDefault();
-          restoreMemo(viewing.id);
-        }
+        if (undo) undoDelete();
+        else if (view === "trash" && viewing) restoreMemo(viewing.id);
       }
     }
     window.addEventListener("keydown", onKey);

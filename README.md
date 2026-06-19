@@ -1,5 +1,7 @@
 # nemo
 
+<p align="center"><img src="public/onigiri.png" alt="nemo mascot" width="96" /></p>
+
 A minimal split-pane markdown memo app — left editor / right preview. Single Cloudflare Worker + D1. ~$0 to run.
 
 ## Stack

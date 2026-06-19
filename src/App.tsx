@@ -1521,7 +1521,12 @@ export default function App() {
           </div>
         ) : currentId == null ? (
           <div className="center">
-            {loading ? "Loading…" : "Select a memo on the left, or create a new one."}
+            {loading ? "Loading…" : (
+              <>
+                <img src="/onigiri.png" alt="" className="mascot" />
+                <p>Select a memo on the left, or create a new one.</p>
+              </>
+            )}
           </div>
         ) : (
           <div className="pane">
@@ -1645,6 +1650,7 @@ function Login({
   return (
     <div className="center">
       <form className="login" onSubmit={submit}>
+        <img src="/onigiri.png" alt="" className="mascot" />
         <h1>nemo</h1>
         <input placeholder="id" value={u} onChange={(e) => setU(e.currentTarget.value)} autoFocus autoComplete="username webauthn" />
         <input

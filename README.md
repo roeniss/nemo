@@ -10,24 +10,6 @@ A minimal split-pane markdown memo app — left editor / right preview. Single C
 - **PWA**: installable, offline-capable (service worker + local-first storage)
 - **Security**: strict CSP + security headers (`public/_headers`), sanitized markdown
 
-## History (session snapshots)
-
-Every memo keeps a lightweight version history, recorded server-side. There are
-no read endpoints — the data is captured for recoverability and, if ever needed,
-queryable directly from D1. The model is **session snapshots**: when a new
-editing session begins, the prior session's final state is preserved into the
-`memo_versions` table. A "new session" is detected on save (`PUT /api/memos/:id`)
-as either:
-
-- a **≥1h idle gap** since the last save (`HISTORY_GAP_MS`), or
-- **continuous editing** that has run ≥1h since the last snapshot (`HISTORY_SESSION_MS`).
-
-So a memo accrues at most ~one snapshot per hour. Empty or unchanged saves are
-skipped, and a hard `?purge=1` delete drops a memo's history with it.
-
-Both thresholds default to 1h; override them (e.g. for local dev) via the
-`HISTORY_GAP_MS` / `HISTORY_SESSION_MS` worker vars in `.dev.vars`.
-
 ## External API
 
 A separate, token-authenticated surface under `/api/ext/*` lets external clients

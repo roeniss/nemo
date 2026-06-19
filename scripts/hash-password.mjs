@@ -1,16 +1,15 @@
-// Mint an AUTH_PASS value (PBKDF2-HMAC-SHA256, salted) for the login secret.
+// Mint a salted PBKDF2-HMAC-SHA256 password hash for a `users.password_hash`
+// (e.g. seeding the first admin user — see README → Deploy).
 // Keep PBKDF2_ITERS in sync with worker/index.ts.
 //
 // The password is read from stdin so it never lands in shell history or `ps`.
-// The hidden prompt is written to stderr and the hash to stdout, so you can pipe
-// the hash to the clipboard and never show it on screen:
-//   node scripts/hash-password.mjs | pbcopy   # type password at hidden prompt → hash to clipboard
-//   npx wrangler secret put AUTH_PASS          # paste at wrangler's masked prompt
+// The hidden prompt is written to stderr and the hash to stdout, so you can
+// capture the hash without showing it on screen:
+//   HASH=$(node scripts/hash-password.mjs)   # type password at hidden prompt → $HASH
 //
 // Other forms:
 //   node scripts/hash-password.mjs                       # print the hash (interactive)
 //   printf '%s' 'pw' | node scripts/hash-password.mjs    # piped (non-interactive / CI)
-// For local dev, put the printed hash into AUTH_PASS in .dev.vars.
 
 const PBKDF2_ITERS = 100_000; // Cloudflare Workers caps PBKDF2 at 100k iterations
 

@@ -61,18 +61,6 @@ curl -X POST https://nemo.roeni.ss/api/ext/memos \
   -d '{"content":"TODO: make a shower"}'
 ```
 
-**Siri Shortcut** ("Hey Siri, make a new note"):
-1. In the **Shortcuts** app, add a *Text* action (or *Ask for Input* → dictation)
-   for the note body.
-2. Add **Get Contents of URL**: URL `https://nemo.roeni.ss/api/ext/memos`,
-   Method `POST`, Headers `Authorization: Bearer <your token>`, Request Body
-   *JSON* with a `content` field set to the Text from step 1.
-3. Name the shortcut "make a new note" — that becomes the Siri phrase.
-
-> Tokens live in a new `api_tokens` table. Apply the schema to create it —
-> `npm run db:local` (local) and `npm run db:remote` (production); both use
-> `CREATE TABLE IF NOT EXISTS`, so re-running is safe.
-
 ## Local development
 ```bash
 npm install
@@ -80,18 +68,15 @@ npm install
 # Create the D1 database (once) → put the printed database_id into wrangler.jsonc
 npx wrangler d1 create nemo-db
 
-# Apply the schema (local)
-npm run db:local
+npm run db:local            # apply schema.sql
+npm run db:seed-test-user   # seed a login user (defaults: roeniss / local-dev-only)
 
-npm run dev          # http://localhost:5173
+npm run dev                 # http://localhost:5173
 ```
-Local credentials live in `.dev.vars` (AUTH_USER / AUTH_PASS / JWT_SECRET).
-`AUTH_PASS` is **not** the plaintext password — it's a salted PBKDF2 hash. Mint one
-(input is read from stdin, so it never hits shell history) and paste it in:
-```bash
-node scripts/hash-password.mjs        # type the password at the hidden prompt
-# → pbkdf2:100000:...   copy this into AUTH_PASS
-```
+`.dev.vars` only needs `JWT_SECRET` (cookie signing). Login authenticates against
+the `users` table — there are no `AUTH_*` env vars. `db:seed-test-user` inserts an
+admin user, reading `TEST_USER` / `TEST_PASS` from the environment (or the
+local-dev defaults above); it hashes the password the same way the worker does.
 
 ## Deploy
 
@@ -99,22 +84,19 @@ CI deploys automatically on push to `main` (`.github/workflows/deploy.yml`). Req
 
 Manual deploy from your machine:
 ```bash
-# Register production secrets (once)
-npx wrangler secret put AUTH_USER
-npx wrangler secret put JWT_SECRET
+npx wrangler secret put JWT_SECRET   # cookie signing (once)
+npm run db:remote                    # apply schema.sql to the remote D1 (once)
 
-# AUTH_PASS must be a salted PBKDF2 hash, never plaintext. This pipes the hash
-# straight to the clipboard (stdout), while the hidden password prompt shows on
-# stderr — so the hash never hits the terminal scrollback or shell history.
-# Paste it at wrangler's (masked) prompt:
-node scripts/hash-password.mjs | pbcopy
-npx wrangler secret put AUTH_PASS
-
-# Apply the schema to the remote D1 (once)
-npm run db:remote
+# Seed the first (admin) user. Mint a salted PBKDF2 hash — the prompt is hidden
+# and read from stdin, so the password never hits shell history — then INSERT it:
+HASH=$(node scripts/hash-password.mjs)   # type the password at the hidden prompt
+npx wrangler d1 execute nemo-db --remote --command \
+  "INSERT INTO users (username, password_hash, is_admin, created_at) VALUES ('you', '$HASH', 1, CAST(strftime('%s','now') AS INTEGER) * 1000)"
 
 npm run deploy
 ```
+Additional users are created in-app by an admin (`POST /api/admin/users`), which
+hashes the password server-side — no manual SQL needed after the first user.
 The `nemo.roeni.ss` custom domain is wired via the `routes` (custom_domain) entry in `wrangler.jsonc` — the `roeni.ss` zone must be on the same Cloudflare account.
 
 ## Bot protection (Cloudflare Turnstile)

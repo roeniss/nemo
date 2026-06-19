@@ -29,11 +29,12 @@ Read endpoints (auth-protected):
 - `GET /api/memos/:id/versions` — list snapshots (newest first; no content)
 - `GET /api/memos/:id/versions/:versionId` — a single snapshot's full content
 
-## Integration API (Siri Shortcut)
+## External API
 
 A separate, token-authenticated surface under `/api/ext/*` lets external clients
-that can't drive the browser login (e.g. a Siri Shortcut) create memos. It is
-**isolated from the web app's JWT-cookie API** and has exactly one endpoint:
+that can't drive the browser login (a Siri Shortcut, curl, a shell script) create
+memos. It is **isolated from the web app's JWT-cookie API** and has exactly one
+endpoint:
 
 - `POST /api/ext/memos` — body `{ "content": "..." }` → creates a memo (the title
   is the first non-empty line).
@@ -52,6 +53,8 @@ Authenticate with `Authorization: Bearer <token>`. Tokens are managed from the
 in-app **⚙ Settings** page (sidebar): *Generate token* shows the plaintext **once**
 (only a SHA-256 hash is stored — it can't be recovered), and *Revoke* disables it.
 
+**curl** — a literal string:
+
 ```bash
 curl -X POST https://nemo.roeni.ss/api/ext/memos \
   -H "Authorization: Bearer nemo_xxxxxxxx" \
@@ -59,16 +62,14 @@ curl -X POST https://nemo.roeni.ss/api/ext/memos \
   -d '{"content":"TODO: make a shower"}'
 ```
 
-### CLI upload
-
-Upload one or more text/markdown files as new memos:
+**curl** — upload a file's contents (`jq -Rs` JSON-encodes the whole file):
 
 ```bash
-NEMO_TOKEN=nemo_xxxx node scripts/upload-memo.mjs note.md [more.md ...]
+curl -X POST https://nemo.roeni.ss/api/ext/memos \
+  -H "Authorization: Bearer nemo_xxxxxxxx" \
+  -H "content-type: application/json" \
+  -d "$(jq -Rs '{content: .}' < note.md)"
 ```
-
-- `NEMO_TOKEN` (required) — your integration token (Bearer auth).
-- `NEMO_BASE_URL` (optional) — defaults to `https://nemo.roeni.ss`.
 
 **Siri Shortcut** ("Hey Siri, make a new note"):
 1. In the **Shortcuts** app, add a *Text* action (or *Ask for Input* → dictation)

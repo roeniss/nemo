@@ -14,6 +14,20 @@ test.describe("keyboard shortcuts", () => {
     await purge(request, await hashId(page));
   });
 
+  // regression for #118: new-memo/undo were remapped off the macOS dead keys
+  // (Alt+N→Alt+C, Alt+U→Alt+Z), so the old Option+N / Option+U bindings must be
+  // inert — pressing them does nothing (and never opens a memo).
+  test("Alt+N and Alt+U are no longer bound", async ({ page }) => {
+    await blankMemo(page);
+    const before = await hashId(page);
+    await page.locator(sel.editor).click();
+    await page.keyboard.press("Alt+KeyN");
+    await page.keyboard.press("Alt+KeyU");
+    await page.waitForTimeout(300); // allow any (unwanted) async new-memo to settle
+    expect(await hashId(page)).toBe(before); // still the same memo — nothing fired
+    await expect(page.locator(sel.editor)).toHaveValue("# ");
+  });
+
   test("Alt+D deletes the open memo and Alt+Z undoes it", async ({ page, request }) => {
     await blankMemo(page);
     await page.locator(sel.editor).click();

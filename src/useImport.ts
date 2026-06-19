@@ -27,9 +27,9 @@ function looksImportable(file: File, text: string): boolean {
   return looksText && !text.includes("\u0000");
 }
 
-// File import (picker + drag-drop) and folder upload register each file as its
-// own memo (filename → "# name" title heading); cmd+v embeds a pasted image
-// inline as base64; plus .md export.
+// File import (picker + drag-drop) registers each file as its own memo
+// (filename → "# name" title heading); cmd+v embeds a pasted image inline as
+// base64; plus .md export.
 export function useImport({ content, currentIdRef, editorRef, onEdit, flash, setMemos }: ImportDeps) {
   // turn one text file into a new memo on the server; returns its meta, or null
   // if the file is a binary / unreadable / the request failed (caller tallies it)
@@ -54,8 +54,9 @@ export function useImport({ content, currentIdRef, editorRef, onEdit, flash, set
   }
 
   // register a batch of files as new memos and surface a summary toast; binaries /
-  // unreadable / failed files are skipped and counted
-  async function importFiles(files: File[], emptyMsg: string) {
+  // unreadable / failed files are skipped and counted. Callers guard against an
+  // empty list, so an empty `created` here always means everything was skipped.
+  async function importFiles(files: File[]) {
     const created: MemoMeta[] = [];
     let skipped = 0;
     for (const file of files) {
@@ -67,31 +68,16 @@ export function useImport({ content, currentIdRef, editorRef, onEdit, flash, set
       setMemos((m) =>
         [...created, ...m.filter((x) => !created.some((c) => c.id === x.id))].sort(byRecent)
       );
-    }
-    if (created.length === 0) {
-      flash(skipped ? "등록할 텍스트 파일이 없어요." : emptyMsg);
-    } else {
       flash(`${created.length}개 문서를 등록했어요${skipped ? ` (${skipped}개 건너뜀)` : ""}.`);
+    } else {
+      flash("등록할 텍스트 파일이 없어요.");
     }
   }
 
   // file picker / drag-drop: each selected file becomes its own memo
   function importFile(files: FileList | File[] | null | undefined) {
     if (!files || files.length === 0) return;
-    return importFiles(Array.from(files), "파일이 비어 있어요.");
-  }
-
-  // folder picker: each file directly inside the folder becomes its own memo.
-  // Non-recursive — files in subfolders are skipped via webkitRelativePath depth.
-  function importFolder(files: FileList | null | undefined) {
-    if (!files || files.length === 0) return;
-    // a webkitdirectory pick yields the whole tree; webkitRelativePath is
-    // "folder/file" for direct children and "folder/sub/file" deeper — keep depth 2
-    const direct = Array.from(files).filter((f) => {
-      const rel = f.webkitRelativePath;
-      return !rel || rel.split("/").length === 2;
-    });
-    return importFiles(direct, "폴더가 비어 있어요.");
+    return importFiles(Array.from(files));
   }
 
   // pull the first image out of a clipboard payload — covers both files
@@ -163,5 +149,5 @@ export function useImport({ content, currentIdRef, editorRef, onEdit, flash, set
     URL.revokeObjectURL(url);
   }
 
-  return { importFile, importFolder, pasteImage, downloadMemo };
+  return { importFile, pasteImage, downloadMemo };
 }

@@ -1078,19 +1078,6 @@ describe("import, download, paste, drop", () => {
     await waitFor(() =>
       expect(server.memos.some((m) => m.content.includes("file body"))).toBe(true)
     );
-
-    // folder import path too (webkitRelativePath depth filter)
-    const folder = container.querySelector(".folder-input") as HTMLInputElement;
-    const ff = new File(["# fo\n\nfolder body"], "fo.md", { type: "text/markdown" });
-    Object.defineProperty(ff, "webkitRelativePath", { value: "dir/fo.md" });
-    const skip = new File(["# deep\n\ndeep body"], "deep.md", { type: "text/markdown" });
-    Object.defineProperty(skip, "webkitRelativePath", { value: "dir/sub/deep.md" });
-    Object.defineProperty(folder, "files", { value: [ff, skip], configurable: true });
-    await act(async () => {
-      folder.dispatchEvent(new Event("change", { bubbles: true }));
-    });
-    await waitFor(() => expect(server.memos.some((m) => m.content.includes("folder body"))).toBe(true));
-    expect(server.memos.some((m) => m.content.includes("deep body"))).toBe(false);
   });
 
   it("clicking ⬆ Files opens the hidden input", async () => {
@@ -1101,11 +1088,6 @@ describe("import, download, paste, drop", () => {
     const spy = vi.spyOn(input, "click").mockImplementation(() => {});
     fireEvent.click(container.querySelector(".import")!);
     expect(spy).toHaveBeenCalled();
-    // folder too
-    const folder = container.querySelector(".folder-input") as HTMLInputElement;
-    const fspy = vi.spyOn(folder, "click").mockImplementation(() => {});
-    fireEvent.click(container.querySelector(".import-folder")!);
-    expect(fspy).toHaveBeenCalled();
   });
 
   it("pastes an image and drops a file onto the editor", async () => {

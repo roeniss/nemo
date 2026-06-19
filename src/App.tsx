@@ -142,10 +142,9 @@ export default function App() {
   }
   const focusOnOpen = useRef(false); // focus the editor after the next new memo opens
   const fileRef = useRef<HTMLInputElement>(null); // hidden file picker for text import
-  const folderRef = useRef<HTMLInputElement>(null); // hidden folder picker (each file → a memo)
   const { notice, flash } = useToast();
-  // file/folder import (each file → its own memo), image paste (base64 embed), and .md export
-  const { importFile, importFolder, pasteImage, downloadMemo } =
+  // file import (each file → its own memo), image paste (base64 embed), and .md export
+  const { importFile, pasteImage, downloadMemo } =
     useImport({ content, currentIdRef, editorRef, onEdit, flash, setMemos });
   // always-latest openMemo, so the hashchange listener (registered once) never
   // calls a stale closure. Assigned to openMemo synchronously on every render
@@ -1364,18 +1363,6 @@ export default function App() {
                 <line x1="12" y1="3" x2="12" y2="15" />
               </svg>
             </button>
-            <button
-              className="import-folder icon-btn"
-              onClick={() => folderRef.current?.click()}
-              title="Upload a folder — each file becomes its own memo"
-              aria-label="Import folder"
-            >
-              <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />
-                <polyline points="12 11 12 17" />
-                <polyline points="9 14 12 11 15 14" />
-              </svg>
-            </button>
             <button className="new-memo icon-btn" onClick={newMemoFromUI} title="New memo (⌘K)" aria-label="New memo">
               <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
                 <line x1="12" y1="5" x2="12" y2="19" />
@@ -1383,22 +1370,6 @@ export default function App() {
               </svg>
             </button>
           </div>
-          <input
-            ref={folderRef}
-            className="folder-input"
-            type="file"
-            multiple
-            // webkitdirectory turns this into a directory picker; it's a non-standard
-            // boolean prop missing from the JSX types, so spread it through. Must be
-            // boolean `true` (not "") — the renderer maps it to the DOM property, and
-            // an empty string would coerce to false.
-            {...({ webkitdirectory: true } as Record<string, boolean>)}
-            style={{ display: "none" }}
-            onChange={(e) => {
-              importFolder(e.currentTarget.files);
-              e.currentTarget.value = ""; // allow re-picking the same folder
-            }}
-          />
           <input
             ref={fileRef}
             className="file-input"

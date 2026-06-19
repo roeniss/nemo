@@ -1216,6 +1216,26 @@ describe("import, download, paste, drop", () => {
     await waitFor(() => expect(c2.querySelector(".sidebar")).toBeTruthy());
     expect((c2.querySelector(".sidebar") as HTMLElement).style.width).toBe("240px");
   });
+
+  it("swallows the macOS Option dead-key character while Alt is held (#118)", async () => {
+    authedBoot();
+    const { container } = render(<App />);
+    await waitFor(() => expect(container.querySelector("textarea.editor")).toBeTruthy());
+    const editor = container.querySelector("textarea.editor") as HTMLTextAreaElement;
+
+    // Alt held (the user is invoking Alt+N) → the dead-key "˜" beforeinput is cancelled,
+    // so the composed tilde never lands in the memo
+    fireEvent.keyDown(window, { altKey: true, code: "KeyN" });
+    const tilde = new InputEvent("beforeinput", { data: "˜", bubbles: true, cancelable: true });
+    editor.dispatchEvent(tilde);
+    expect(tilde.defaultPrevented).toBe(true);
+
+    // Alt released → normal typing (and IME composition) passes through untouched
+    fireEvent.keyUp(window, { altKey: false });
+    const normal = new InputEvent("beforeinput", { data: "a", bubbles: true, cancelable: true });
+    editor.dispatchEvent(normal);
+    expect(normal.defaultPrevented).toBe(false);
+  });
 });
 
 // ===========================================================================

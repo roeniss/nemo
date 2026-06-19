@@ -156,6 +156,7 @@ export default function App() {
     pv.scrollTop += centerDelta(top, target.clientHeight, pv.clientHeight);
   }
   const focusOnOpen = useRef(false); // focus the editor after the next new memo opens
+  const altHeld = useRef(false); // Alt/Option currently down — gates the dead-key guard (#118)
   const fileRef = useRef<HTMLInputElement>(null); // hidden file picker for text import
   const { notice, flash } = useToast();
   // file import (each file → its own memo), image paste (base64 embed), and .md export
@@ -964,6 +965,19 @@ export default function App() {
     localStorage.setItem("qm-sidebar-width", String(sidebarWidth));
   }, [sidebarWidth]);
 
+  // track whether Alt/Option is held — feeds the editor's dead-key guard (#118)
+  useEffect(() => {
+    const sync = (e: KeyboardEvent) => {
+      altHeld.current = e.altKey;
+    };
+    window.addEventListener("keydown", sync);
+    window.addEventListener("keyup", sync);
+    return () => {
+      window.removeEventListener("keydown", sync);
+      window.removeEventListener("keyup", sync);
+    };
+  }, []);
+
   // drag a file anywhere over the window → show the drop overlay and accept the
   // drop (registered once; reads the latest importFile via the ref). Centralised
   // here rather than on the editor so the whole window is a drop target. A depth
@@ -1532,6 +1546,15 @@ export default function App() {
               onChange={(e) => onEdit(e.currentTarget.value)}
               onSelect={syncPreviewToCaret}
               onKeyDown={handleEditorKeyDown}
+              onBeforeInput={(e) => {
+                // macOS Option+<key> is a dead key (Option+N → "˜", Option+U → "¨").
+                // Alt+N / Alt+U are our shortcuts, but the dead key still commits its
+                // diacritic via a later input event into the focused editor (#118).
+                // While Alt is held the user is invoking a shortcut, not typing, so
+                // swallow whatever the dead key tries to insert. (Korean/IME input
+                // never fires with Alt held, so this never touches normal composition.)
+                if (altHeld.current) e.preventDefault();
+              }}
               onPaste={(e) => {
                 // a pasted image is embedded inline as base64; everything else
                 // falls through to the normal text paste

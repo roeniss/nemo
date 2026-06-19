@@ -228,22 +228,12 @@ export async function runTool(
     const content = asString(args.content);
     const prev = await db
       .prepare(
-        "SELECT title, content, updated_at FROM memos WHERE id = ? AND deleted_at IS NULL AND user_id = ?"
+        "SELECT id FROM memos WHERE id = ? AND deleted_at IS NULL AND user_id = ?"
       )
       .bind(id, uid)
-      .first<{ title: string; content: string; updated_at: number }>();
+      .first<{ id: number }>();
     if (!prev) throw new ToolError("memo not found");
     const now = Date.now();
-    // always snapshot the prior non-empty content on a real change, so an API edit
-    // is never silently destructive (recoverable from the app's history view)
-    if (prev.content && prev.content !== content) {
-      await db
-        .prepare(
-          "INSERT INTO memo_versions (memo_id, title, content, created_at) VALUES (?, ?, ?, ?)"
-        )
-        .bind(id, prev.title, prev.content, prev.updated_at)
-        .run();
-    }
     const title = deps.titleFrom(content);
     await db
       .prepare("UPDATE memos SET title = ?, content = ?, updated_at = ? WHERE id = ? AND user_id = ?")

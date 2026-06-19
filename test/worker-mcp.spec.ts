@@ -24,13 +24,6 @@ CREATE TABLE memos (
   deleted_at INTEGER,
   hidden_at INTEGER
 );
-CREATE TABLE memo_versions (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  memo_id INTEGER NOT NULL,
-  title TEXT NOT NULL,
-  content TEXT NOT NULL,
-  created_at INTEGER NOT NULL
-);
 CREATE TABLE api_tokens (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   label TEXT NOT NULL DEFAULT '',
@@ -321,23 +314,13 @@ describe("MCP tools", () => {
     expect(bad.text).toContain("integer");
   });
 
-  it("update_memo replaces content and snapshots the prior version", async () => {
+  it("update_memo replaces content", async () => {
     const token = await mintToken();
     await db.prepare("INSERT INTO memos (id, title, content, user_id, created_at, updated_at) VALUES (3,'old','old body',1,1,1)").run();
     const ok = await resultText(await call(token, "update_memo", { id: 3, content: "# new body" }));
     expect(ok.isError).toBe(false);
     const row = await db.prepare("SELECT content, title FROM memos WHERE id = 3").first<any>();
     expect(row.content).toBe("# new body");
-    const ver = await db.prepare("SELECT content FROM memo_versions WHERE memo_id = 3").first<any>();
-    expect(ver.content).toBe("old body"); // prior content preserved
-  });
-
-  it("update_memo does not snapshot when content is unchanged", async () => {
-    const token = await mintToken();
-    await db.prepare("INSERT INTO memos (id, title, content, user_id, created_at, updated_at) VALUES (4,'t','same',1,1,1)").run();
-    await call(token, "update_memo", { id: 4, content: "same" });
-    const ver = await db.prepare("SELECT COUNT(*) AS n FROM memo_versions WHERE memo_id = 4").first<any>();
-    expect(ver.n).toBe(0);
   });
 
   it("update_memo errors when the memo does not exist", async () => {
@@ -385,8 +368,8 @@ describe("MCP tools", () => {
   it("surfaces an unexpected (non-ToolError) failure as a generic tool error", async () => {
     const token = await mintToken();
     await db.prepare("INSERT INTO memos (id, title, content, user_id, created_at, updated_at) VALUES (10,'t','body',1,1,1)").run();
-    // drop the versions table so the snapshot INSERT throws a raw DB error
-    db.exec("DROP TABLE memo_versions");
+    // drop the memos table so the update's DB query throws a raw error
+    db.exec("DROP TABLE memos");
     const r = await resultText(await call(token, "update_memo", { id: 10, content: "changed" }));
     expect(r.isError).toBe(true);
     expect(r.text).toBe("tool execution failed");

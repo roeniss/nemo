@@ -59,6 +59,17 @@ curl -X POST https://nemo.roeni.ss/api/ext/memos \
   -d '{"content":"TODO: make a shower"}'
 ```
 
+### CLI upload
+
+Upload one or more text/markdown files as new memos:
+
+```bash
+NEMO_TOKEN=nemo_xxxx node scripts/upload-memo.mjs note.md [more.md ...]
+```
+
+- `NEMO_TOKEN` (required) — your integration token (Bearer auth).
+- `NEMO_BASE_URL` (optional) — defaults to `https://nemo.roeni.ss`.
+
 **Siri Shortcut** ("Hey Siri, make a new note"):
 1. In the **Shortcuts** app, add a *Text* action (or *Ask for Input* → dictation)
    for the note body.

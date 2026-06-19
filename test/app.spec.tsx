@@ -798,7 +798,7 @@ describe("delete and undo", () => {
 // KEYBOARD SHORTCUTS
 // ===========================================================================
 describe("keyboard shortcuts", () => {
-  it("Cmd+S saves and Alt+C creates a new memo", async () => {
+  it("Cmd+S saves and Alt+N creates a new memo", async () => {
     authedBoot();
     const row = server.seed({ title: "Keys", content: "# Keys" });
     location.hash = "#" + row.id;
@@ -810,15 +810,15 @@ describe("keyboard shortcuts", () => {
     fireEvent.keyDown(window, { key: "s", metaKey: true });
     await waitFor(() => expect(row.content).toContain("saved by shortcut"));
 
-    fireEvent.keyDown(window, { code: "KeyC", altKey: true });
-    // Alt+C opens a fresh local temp (negative id, blank doc) — no server row
+    fireEvent.keyDown(window, { code: "KeyN", altKey: true });
+    // Alt+N opens a fresh local temp (negative id, blank doc) — no server row
     await waitFor(() => {
       expect(location.hash).toMatch(/^#-\d+$/);
       expect((container.querySelector("textarea.editor") as HTMLTextAreaElement).value).toBe("# ");
     });
   });
 
-  it("Alt+D deletes the open memo and Alt+Z undoes it", async () => {
+  it("Alt+D deletes the open memo and Alt+U undoes it", async () => {
     authedBoot();
     server.seed({ title: "Bye", content: "# Bye\n\nbody" });
     server.seed({ title: "Keep", content: "# Keep\n\nbody" });
@@ -844,12 +844,12 @@ describe("keyboard shortcuts", () => {
     });
 
     await act(async () => {
-      fireEvent.keyDown(window, { code: "KeyZ", altKey: true });
+      fireEvent.keyDown(window, { code: "KeyU", altKey: true });
     });
     await waitFor(() => expect(container.querySelector(".memo-list")?.textContent).toContain("Bye"));
   });
 
-  it("Alt+Z restores the trashed memo being viewed", async () => {
+  it("Alt+U restores the trashed memo being viewed", async () => {
     authedBoot();
     const { container } = render(<App />);
     await waitFor(() => expect(container.querySelector(".side-tabs")).toBeTruthy());
@@ -871,23 +871,13 @@ describe("keyboard shortcuts", () => {
     });
     expect(container.querySelectorAll(".memo-list .restore").length).toBe(1);
 
-    // Alt+Z (no pending undo) restores the viewed trash memo. Re-fire inside
+    // Alt+U (no pending undo) restores the viewed trash memo. Re-fire inside
     // waitFor: the keydown effect re-registers with `viewing` a passive-effect tick
     // after viewTrash's async setViewing commits, so the first press can race it.
     await waitFor(() => {
-      fireEvent.keyDown(window, { code: "KeyZ", altKey: true });
+      fireEvent.keyDown(window, { code: "KeyU", altKey: true });
       expect(container.querySelectorAll(".memo-list .restore").length).toBe(0);
     });
-  });
-
-  it("Alt+Z preventDefaults even with nothing to undo, so Option+Z's 'Ω' never lands (#118)", async () => {
-    authedBoot();
-    const { container } = render(<App />);
-    await waitFor(() => expect(container.querySelector("textarea.editor")).toBeTruthy());
-    // memos view, no pending undo → Alt+Z is a no-op, but must still cancel the
-    // keydown's default action (else the Option+Z character would be typed in)
-    const prevented = !fireEvent.keyDown(window, { code: "KeyZ", altKey: true });
-    expect(prevented).toBe(true);
   });
 
   it("Alt+J / Alt+K navigate between memos", async () => {

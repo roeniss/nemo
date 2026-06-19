@@ -52,9 +52,9 @@ describe("Settings — keyboard shortcuts", () => {
     // each combo key is rendered as a <kbd>
     const keys = Array.from(container.querySelectorAll(".shortcut-list kbd")).map((k) => k.textContent);
     expect(keys).toContain("S");
-    expect(keys).toContain("C");
+    expect(keys).toContain("N");
     expect(keys).toContain("D");
-    expect(keys).toContain("Z");
+    expect(keys).toContain("U");
     expect(container.querySelector(".shortcut-list")?.textContent).toContain("New memo");
   });
 });

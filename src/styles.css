@@ -98,6 +98,7 @@ input {
   width: 96px;
   height: auto;
   margin-bottom: 12px;
+  align-self: center;
 }
 
 /* login */

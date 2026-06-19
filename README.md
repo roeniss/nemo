@@ -1,6 +1,6 @@
 # nemo
 
-A minimal velog-style markdown memo app — left editor / right preview. Single Cloudflare Worker + D1. ~$0 to run.
+A minimal split-pane markdown memo app — left editor / right preview. Single Cloudflare Worker + D1. ~$0 to run.
 
 ## Stack
 - **Deploy**: Cloudflare Worker + Static Assets, D1 (SQLite), domain `nemo.roeni.ss`

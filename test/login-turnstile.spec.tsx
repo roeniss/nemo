@@ -82,7 +82,12 @@ beforeEach(() => {
   document.getElementById("cf-turnstile-script")?.remove();
 });
 
-afterEach(() => {
+afterEach(async () => {
+  // Drain any in-flight boot promise while the mocked fetch + happy-dom env are
+  // still in place, so a late-settling boot resolves via the 401 .then path
+  // rather than firing its offline .catch after teardown — where `location` is
+  // gone and it throws "location is not defined" (flaky CI failure, #136).
+  await new Promise((r) => setTimeout(r));
   vi.unstubAllEnvs();
   vi.resetModules();
   vi.restoreAllMocks();

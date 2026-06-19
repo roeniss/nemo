@@ -137,6 +137,31 @@ input {
   flex-direction: column;
   overflow: hidden;
 }
+/* drag handle between the sidebar and the main pane (its own 6px flex column,
+   so it never overlaps the list's controls) */
+.sidebar-resize {
+  flex: 0 0 6px;
+  cursor: col-resize;
+  background: var(--border);
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+.sidebar-resize:hover {
+  opacity: 1;
+}
+/* full-screen affordance shown while a file is dragged over the window */
+.drop-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.45);
+  color: #fff;
+  font-size: 1.25rem;
+  pointer-events: none; /* purely visual — the window handles the drop */
+}
 .side-tabs {
   display: flex;
   border-bottom: 1px solid var(--border);

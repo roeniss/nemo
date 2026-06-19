@@ -1,5 +1,7 @@
 # nemo
 
+<img src="public/onigiri.png" alt="nemo mascot" width="96" />
+
 A minimal velog-style markdown memo app — left editor / right preview. Single Cloudflare Worker + D1. ~$0 to run.
 
 ## Stack

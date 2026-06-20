@@ -23,7 +23,7 @@ jobs:
     # manual runs always proceed; CI-triggered runs only when CI passed
     if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - uses: actions/setup-node@v6
         with:

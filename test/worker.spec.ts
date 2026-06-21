@@ -23,7 +23,8 @@ CREATE TABLE memos (
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL,
   deleted_at INTEGER,
-  hidden_at INTEGER
+  hidden_at INTEGER,
+  published_at INTEGER
 );
 CREATE TABLE memo_versions (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -260,6 +261,53 @@ describe("memos", () => {
 
     // User 2 cannot fetch user 1's memo directly
     expect((await req(`/api/memos/${memo.id}`, { headers: h2 })).status).toBe(404);
+  });
+});
+
+describe("publish (public /p/:id page)", () => {
+  const mk = async (h: HeadersInit, content: string) => {
+    const c = await (await req("/api/memos", { method: "POST", headers: h })).json();
+    await req(`/api/memos/${c.id}`, { method: "PUT", headers: h, body: JSON.stringify({ content }) });
+    return c.id as number;
+  };
+
+  it("404s for an unpublished or nonexistent memo", async () => {
+    const h = await authedHeaders();
+    const id = await mk(h, "# Secret");
+    expect((await req(`/p/${id}`)).status).toBe(404);
+    expect((await req("/p/999999")).status).toBe(404);
+  });
+
+  it("publishes, serves rendered HTML with a no-script CSP, then unpublishes", async () => {
+    const h = await authedHeaders();
+    const id = await mk(h, "# Title\n\n**bold**");
+    const pub = await req(`/api/memos/${id}/publish`, { method: "POST", headers: h });
+    expect(pub.status).toBe(200);
+    expect((await pub.json()).url).toBe(`/p/${id}`);
+
+    const page = await req(`/p/${id}`);
+    expect(page.status).toBe(200);
+    expect(page.headers.get("content-security-policy")).toContain("script-src");
+    const body = await page.text();
+    expect(body).toContain("<strong>bold</strong>");
+    expect(body).toContain("<title>Title</title>");
+
+    await req(`/api/memos/${id}/publish`, { method: "DELETE", headers: h });
+    expect((await req(`/p/${id}`)).status).toBe(404);
+  });
+
+  it("escapes the title and is idempotent on re-publish", async () => {
+    const h = await authedHeaders();
+    const id = await mk(h, "# a <b> & \"c\"");
+    await req(`/api/memos/${id}/publish`, { method: "POST", headers: h });
+    await req(`/api/memos/${id}/publish`, { method: "POST", headers: h }); // re-publish: no error
+    const body = await (await req(`/p/${id}`)).text();
+    expect(body).toContain("<title>a &lt;b&gt; &amp; &quot;c&quot;</title>");
+  });
+
+  it("404s when publishing a memo that doesn't exist", async () => {
+    const h = await authedHeaders();
+    expect((await req("/api/memos/999999/publish", { method: "POST", headers: h })).status).toBe(404);
   });
 });
 

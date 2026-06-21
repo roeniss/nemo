@@ -90,6 +90,7 @@ export default function App() {
   const freshIds = useRef<Set<number>>(new Set());
   const [currentId, setCurrentId] = useState<number | null>(null);
   const [content, setContent] = useState("");
+  const [published, setPublished] = useState(false); // current memo's public /p/:id state
   const [sidebar, setSidebar] = useState(() => window.innerWidth > 640); // closed by default on mobile
   // sidebar width, drag-resizable via the handle on its right edge and persisted
   // across reloads (qm-sidebar-width). Clamp on read so a stale/garbage value
@@ -398,6 +399,7 @@ export default function App() {
     setDeleted(false);
     lastSaveAt.current = Date.now();
     setCurrentId(id);
+    setPublished(false); // unknown until the server row loads (temps are never public)
 
     // stale-while-revalidate: show local content INSTANTLY (no network wait),
     // draft beats cache; then revalidate against the server in the background
@@ -416,6 +418,7 @@ export default function App() {
       const r = await api(`/memos/${id}`);
       if (!r.ok || currentIdRef.current !== id) return; // 404 / user moved on
       const memo = (await r.json()) as Memo;
+      setPublished(memo.published_at != null);
       kv.set(CONTENT_CACHE + id, memo.content);
       const d = kv.get(DRAFT + id);
       if (d != null && d !== memo.content) {
@@ -431,6 +434,24 @@ export default function App() {
       }
     } catch {
       setOffline(true); // offline — keep the instantly-shown local content
+    }
+  }
+
+  // publish / unpublish the current memo. On publish, copy its public link to the
+  // clipboard; on unpublish, just flash. No-op for temps (id<0, never on server).
+  async function togglePublish() {
+    const id = currentId!; // the button is disabled when id is null / a temp (id<0)
+    if (published) {
+      await api(`/memos/${id}/publish`, { method: "DELETE" });
+      setPublished(false);
+      flash("Unpublished");
+    } else {
+      const r = await api(`/memos/${id}/publish`, { method: "POST" });
+      if (!r.ok) return flash("Publish failed");
+      setPublished(true);
+      const url = `${location.origin}/p/${id}`;
+      await navigator.clipboard.writeText(url).catch(() => {});
+      flash("Public link copied");
     }
   }
 
@@ -1441,6 +1462,19 @@ export default function App() {
                 <path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.02-1.49-2.22.48-2.69-1.07-2.69-1.07-.36-.92-.89-1.17-.89-1.17-.73-.5.05-.49.05-.49.8.06 1.23.83 1.23.83.72 1.23 1.87.87 2.33.67.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.83-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0 0 16 8c0-4.42-3.58-8-8-8z" />
               </svg>
             </a>
+            <button
+              className={`publish icon-btn${published ? " active" : ""}`}
+              onClick={togglePublish}
+              disabled={currentId == null || currentId < 0}
+              title={published ? "Published — click to unpublish (copy link)" : "Publish this memo to a public link"}
+              aria-label={published ? "Unpublish memo" : "Publish memo"}
+            >
+              <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M4 12v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8" />
+                <polyline points="16 6 12 2 8 6" />
+                <line x1="12" y1="2" x2="12" y2="15" />
+              </svg>
+            </button>
             <button
               className="download icon-btn"
               onClick={downloadMemo}

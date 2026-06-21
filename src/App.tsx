@@ -1586,6 +1586,13 @@ function Login({
   const [msg, setMsg] = useState<string | null>(null);
   const [token, setToken] = useState("");
   const widget = useRef<HTMLDivElement>(null);
+  const idRef = useRef<HTMLInputElement>(null);
+
+  // drop the cursor in the id input on mount — native autoFocus is unreliable here
+  // (and never re-fires), so focus it explicitly
+  useEffect(() => {
+    idRef.current?.focus();
+  }, []);
 
   // Immediately show the passkey picker modal on mount — but only when the device
   // actually has a platform authenticator, so browsers/devices without one don't
@@ -1656,7 +1663,7 @@ function Login({
       <form className="login" onSubmit={submit}>
         <img src="/onigiri.png" alt="" className="mascot" />
         <h1>nemo</h1>
-        <input placeholder="id" value={u} onChange={(e) => setU(e.currentTarget.value)} autoFocus autoComplete="username webauthn" />
+        <input ref={idRef} placeholder="id" value={u} onChange={(e) => setU(e.currentTarget.value)} autoFocus autoComplete="username webauthn" />
         <input
           type="password"
           placeholder="password"

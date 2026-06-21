@@ -1588,23 +1588,22 @@ function Login({
   const widget = useRef<HTMLDivElement>(null);
   const idRef = useRef<HTMLInputElement>(null);
 
-  // drop the cursor in the id input on mount — native autoFocus is unreliable here
-  // (and never re-fires), so focus it explicitly. Also re-focus whenever the window
-  // regains focus: the auto passkey popup (below) blurs the page, and on close the
-  // window 'focus' event fires — that's the reliable, timing-independent moment to
-  // put the cursor back, unlike a one-frame guess after the promise settles. Guarded
-  // so it never steals focus from the password field the user may already be in.
+  // drop the cursor in the id input — native autoFocus is unreliable here (and never
+  // re-fires), so focus it explicitly. focusId() is guarded so it never steals focus
+  // from a field the user is already in (e.g. the password box). refocusId() retries
+  // over ~300ms: Chrome's native passkey dialog (below) blurs the input WITHOUT
+  // firing window blur/focus, so the only signal it closed is the promise settling —
+  // and Chrome keeps fiddling with focus for a few frames after that, so a single
+  // focus() loses the race.
   function focusId() {
-    idRef.current?.focus();
+    const a = document.activeElement;
+    if (!a || a === document.body) idRef.current?.focus();
+  }
+  function refocusId() {
+    for (const ms of [0, 60, 150, 300]) setTimeout(focusId, ms);
   }
   useEffect(() => {
-    focusId();
-    function onWinFocus() {
-      const a = document.activeElement;
-      if (!a || a === document.body) focusId();
-    }
-    window.addEventListener("focus", onWinFocus);
-    return () => window.removeEventListener("focus", onWinFocus);
+    idRef.current?.focus();
   }, []);
 
   // Immediately show the passkey picker modal on mount — but only when the device
@@ -1620,7 +1619,8 @@ function Login({
       .then((available) => {
         if (available) return onPasskeyLogin();
       })
-      .catch(() => {}); // cancel handled by the window-focus listener above
+      .catch(() => {})
+      .finally(refocusId); // dialog closed (cancelled/failed) → put the cursor back
   }, []);
 
   // load + render the Turnstile widget (only when a site key is configured)

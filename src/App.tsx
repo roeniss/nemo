@@ -1589,13 +1589,23 @@ function Login({
   const idRef = useRef<HTMLInputElement>(null);
 
   // drop the cursor in the id input on mount — native autoFocus is unreliable here
-  // (and never re-fires), so focus it explicitly. Re-applied once the auto passkey
-  // prompt below settles, since that popup steals focus on open and cancelling it
-  // would otherwise leave nothing focused.
+  // (and never re-fires), so focus it explicitly. Also re-focus whenever the window
+  // regains focus: the auto passkey popup (below) blurs the page, and on close the
+  // window 'focus' event fires — that's the reliable, timing-independent moment to
+  // put the cursor back, unlike a one-frame guess after the promise settles. Guarded
+  // so it never steals focus from the password field the user may already be in.
   function focusId() {
     idRef.current?.focus();
   }
-  useEffect(focusId, []);
+  useEffect(() => {
+    focusId();
+    function onWinFocus() {
+      const a = document.activeElement;
+      if (!a || a === document.body) focusId();
+    }
+    window.addEventListener("focus", onWinFocus);
+    return () => window.removeEventListener("focus", onWinFocus);
+  }, []);
 
   // Immediately show the passkey picker modal on mount — but only when the device
   // actually has a platform authenticator, so browsers/devices without one don't
@@ -1610,11 +1620,7 @@ function Login({
       .then((available) => {
         if (available) return onPasskeyLogin();
       })
-      // cancelled passkey popup → put the cursor back in the id input. Deferred a
-      // frame so it runs AFTER the browser restores focus on modal close (which
-      // otherwise overrides an immediate focus()).
-      .catch(() => {})
-      .finally(() => requestAnimationFrame(focusId));
+      .catch(() => {}); // cancel handled by the window-focus listener above
   }, []);
 
   // load + render the Turnstile widget (only when a site key is configured)

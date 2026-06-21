@@ -391,6 +391,10 @@ describe("publish", () => {
     expect(row.published_at).toBeTruthy();
     // the sidebar shows exactly one published-dot (the target, not "Other")
     await waitFor(() => expect(container.querySelectorAll(".published-dot").length).toBe(1));
+    // the dedicated copy-link button (shown only when published) re-copies the link
+    writeText.mockClear();
+    fireEvent.click(container.querySelector(".copy-link") as HTMLButtonElement);
+    expect(writeText).toHaveBeenCalledWith(`${location.origin}/p/${row.id}`);
 
     fireEvent.click(publishBtn(container));
     await waitFor(() => expect(publishBtn(container).className).not.toContain("active"));

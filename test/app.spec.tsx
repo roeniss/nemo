@@ -382,16 +382,20 @@ describe("publish", () => {
     // reject so the clipboard `.catch(() => {})` fallback runs (publish still succeeds)
     const writeText = vi.fn(() => Promise.reject(new Error("denied")));
     Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
+    server.seed({ title: "Other", content: "# Other" }); // a non-matching list item for the setMemos map
     const { container, row } = await openTarget();
 
     fireEvent.click(publishBtn(container));
     await waitFor(() => expect(publishBtn(container).className).toContain("active"));
     expect(writeText).toHaveBeenCalledWith(`${location.origin}/p/${row.id}`);
     expect(row.published_at).toBeTruthy();
+    // the sidebar shows exactly one published-dot (the target, not "Other")
+    await waitFor(() => expect(container.querySelectorAll(".published-dot").length).toBe(1));
 
     fireEvent.click(publishBtn(container));
     await waitFor(() => expect(publishBtn(container).className).not.toContain("active"));
     expect(row.published_at).toBeNull();
+    await waitFor(() => expect(container.querySelectorAll(".published-dot").length).toBe(0));
   });
 
   it("reflects an already-published memo on load and flashes on publish failure", async () => {

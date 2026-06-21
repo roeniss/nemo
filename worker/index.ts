@@ -667,7 +667,7 @@ function titleFrom(content: string): string {
 app.get("/api/memos", async (c) => {
   const { uid } = getUser(c);
   const { results } = await c.env.DB.prepare(
-    "SELECT id, title, updated_at FROM memos WHERE deleted_at IS NULL AND user_id = ? ORDER BY updated_at DESC"
+    "SELECT id, title, updated_at, published_at FROM memos WHERE deleted_at IS NULL AND user_id = ? ORDER BY updated_at DESC"
   ).bind(uid).all();
   return c.json(results);
 });
@@ -682,7 +682,7 @@ app.get("/api/search", async (c) => {
   // escape LIKE wildcards so "%" / "_" in the query match literally, not as patterns
   const like = `%${q.replace(/[\\%_]/g, "\\$&")}%`;
   const { results } = await c.env.DB.prepare(
-    "SELECT id, title, updated_at FROM memos WHERE deleted_at IS NULL AND user_id = ? AND (title LIKE ? ESCAPE '\\' OR content LIKE ? ESCAPE '\\') ORDER BY updated_at DESC"
+    "SELECT id, title, updated_at, published_at FROM memos WHERE deleted_at IS NULL AND user_id = ? AND (title LIKE ? ESCAPE '\\' OR content LIKE ? ESCAPE '\\') ORDER BY updated_at DESC"
   )
     .bind(uid, like, like)
     .all();

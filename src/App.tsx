@@ -444,11 +444,13 @@ export default function App() {
     if (published) {
       await api(`/memos/${id}/publish`, { method: "DELETE" });
       setPublished(false);
+      setMemos((ms) => ms.map((x) => (x.id === id ? { ...x, published_at: null } : x)));
       flash("Unpublished");
     } else {
       const r = await api(`/memos/${id}/publish`, { method: "POST" });
       if (!r.ok) return flash("Publish failed");
       setPublished(true);
+      setMemos((ms) => ms.map((x) => (x.id === id ? { ...x, published_at: Date.now() } : x)));
       const url = `${location.origin}/p/${id}`;
       await navigator.clipboard.writeText(url).catch(() => {});
       flash("Public link copied");
@@ -1319,6 +1321,11 @@ export default function App() {
                     onClick={() => openMemo(m.id)}
                   >
                     <span className="memo-title">{m.title || "Untitled"}</span>
+                    {m.published_at != null && (
+                      <span className="published-dot" title="Published to a public link" aria-label="Published">
+                        ●
+                      </span>
+                    )}
                     <button
                       className="del"
                       onClick={(e) => {
@@ -1470,9 +1477,9 @@ export default function App() {
               aria-label={published ? "Unpublish memo" : "Publish memo"}
             >
               <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M4 12v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8" />
-                <polyline points="16 6 12 2 8 6" />
-                <line x1="12" y1="2" x2="12" y2="15" />
+                <circle cx="12" cy="12" r="10" />
+                <line x1="2" y1="12" x2="22" y2="12" />
+                <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z" />
               </svg>
             </button>
             <button

@@ -1,7 +1,7 @@
 // Pure types, constants and helpers shared by the app (no React, no component state).
 
-export type MemoMeta = { id: number; title: string; updated_at: number };
-export type Memo = MemoMeta & { content: string; created_at: number; published_at?: number | null };
+export type MemoMeta = { id: number; title: string; updated_at: number; published_at?: number | null };
+export type Memo = MemoMeta & { content: string; created_at: number };
 export type LoginResult = { ok: boolean; status?: number };
 
 // localStorage / IndexedDB key prefixes

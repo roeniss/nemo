@@ -9,7 +9,7 @@ import { DRAFT, CONTENT_CACHE, TEMPS_KEY, LIST_CACHE } from "../src/lib";
 // In-memory fake server keyed by url + method. Holds memos/trash and responds
 // the way the worker would, so the app's effects behave realistically.
 // ---------------------------------------------------------------------------
-type Row = { id: number; title: string; updated_at: number; content: string; created_at: number };
+type Row = { id: number; title: string; updated_at: number; content: string; created_at: number; published_at?: number | null };
 
 // Memo ids are monotonic across the WHOLE file (never reset per test). The shared
 // module-level kv mirror is written by zombie in-flight save()/persist calls from a
@@ -35,6 +35,7 @@ function makeServer() {
     searchStatus: 0, // override GET /api/search status (e.g. 500) when > 0
     meOk: true, // GET /me (admin probe) ok; flip false to force a not-ok response
     meThrows: false, // GET /me rejects (network error) — exercises the admin-probe catch
+    publishStatus: 0, // override POST /publish status (e.g. 500) when > 0, else normal
   };
 
   function meta(r: Row) {
@@ -111,6 +112,22 @@ function makeServer() {
           const [row] = memos.splice(idx, 1);
           if (!url.includes("purge=1")) trash.unshift(row);
         }
+        return json({ ok: true });
+      }
+    }
+
+    m = path.match(/^\/memos\/(-?\d+)\/publish$/);
+    if (m) {
+      const id = Number(m[1]);
+      const row = memos.find((x) => x.id === id);
+      if (method === "POST") {
+        if (opts.publishStatus) return new Response("", { status: opts.publishStatus });
+        if (!row) return new Response("", { status: 404 });
+        row.published_at = now();
+        return json({ ok: true, url: `/p/${id}` });
+      }
+      if (method === "DELETE") {
+        if (row) row.published_at = null;
         return json({ ok: true });
       }
     }
@@ -340,6 +357,57 @@ describe("authed boot", () => {
     await waitFor(() =>
       expect((container.querySelector("textarea.editor") as HTMLTextAreaElement)?.value).toContain("Target")
     );
+  });
+});
+
+// ===========================================================================
+// PUBLISH (public /p/:id link)
+// ===========================================================================
+describe("publish", () => {
+  const publishBtn = (c: HTMLElement) =>
+    Array.from(c.querySelectorAll("button")).find((b) => b.className.includes("publish")) as HTMLButtonElement;
+
+  async function openTarget() {
+    authedBoot();
+    const row = server.seed({ title: "Pub", content: "# Pub\n\nbody" });
+    location.hash = "#" + row.id;
+    const { container } = render(<App />);
+    await waitFor(() =>
+      expect((container.querySelector("textarea.editor") as HTMLTextAreaElement)?.value).toContain("Pub")
+    );
+    return { container, row };
+  }
+
+  it("publishes: copies the link, marks active, then unpublishes", async () => {
+    // reject so the clipboard `.catch(() => {})` fallback runs (publish still succeeds)
+    const writeText = vi.fn(() => Promise.reject(new Error("denied")));
+    Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
+    const { container, row } = await openTarget();
+
+    fireEvent.click(publishBtn(container));
+    await waitFor(() => expect(publishBtn(container).className).toContain("active"));
+    expect(writeText).toHaveBeenCalledWith(`${location.origin}/p/${row.id}`);
+    expect(row.published_at).toBeTruthy();
+
+    fireEvent.click(publishBtn(container));
+    await waitFor(() => expect(publishBtn(container).className).not.toContain("active"));
+    expect(row.published_at).toBeNull();
+  });
+
+  it("reflects an already-published memo on load and flashes on publish failure", async () => {
+    Object.defineProperty(navigator, "clipboard", { value: { writeText: vi.fn(() => Promise.reject(new Error("no"))) }, configurable: true });
+    authedBoot();
+    const row = server.seed({ title: "Live", content: "# Live", published_at: 123 });
+    location.hash = "#" + row.id;
+    const { container } = render(<App />);
+    await waitFor(() => expect(publishBtn(container).className).toContain("active"));
+
+    // unpublish, then a failing re-publish surfaces the error toast
+    fireEvent.click(publishBtn(container));
+    await waitFor(() => expect(publishBtn(container).className).not.toContain("active"));
+    server.opts.publishStatus = 500;
+    fireEvent.click(publishBtn(container));
+    await waitFor(() => expect(container.textContent).toContain("Publish failed"));
   });
 });
 

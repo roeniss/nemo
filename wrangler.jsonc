@@ -10,7 +10,7 @@
   "preview_urls": true,
   "assets": {
     "not_found_handling": "single-page-application",
-    "run_worker_first": ["/api/*", "/.well-known/*"]
+    "run_worker_first": ["/api/*", "/.well-known/*", "/p/*"]
   },
   "observability": {
     "enabled": true

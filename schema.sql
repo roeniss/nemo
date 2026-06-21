@@ -18,7 +18,8 @@ CREATE TABLE IF NOT EXISTS memos (
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL,
   deleted_at INTEGER,
-  hidden_at INTEGER -- trashed memo permanently hidden from the trash view (row kept)
+  hidden_at INTEGER, -- trashed memo permanently hidden from the trash view (row kept)
+  published_at INTEGER -- when set, the memo is public at /p/:id (NULL = private)
 );
 
 CREATE INDEX IF NOT EXISTS idx_memos_updated_at ON memos (updated_at DESC);

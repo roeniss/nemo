@@ -1,4 +1,5 @@
 import { Hono } from "hono";
+import { marked } from "marked";
 import { sign, jwt } from "hono/jwt";
 import { setCookie, deleteCookie } from "hono/cookie";
 import {
@@ -505,6 +506,55 @@ registerMcp(app, { hashToken, titleFrom });
 // gate); /authorize reuses the nemo login itself. See worker/oauth.ts.
 registerOAuth(app, { hashToken, newToken, verifyPassword });
 
+// --- public memo page (/p/:id) ------------------------------------------
+// A read-only, no-auth view of a memo the owner explicitly published. Server-
+// rendered: the worker turns markdown into a centered HTML page. No client JS
+// runs on it, so a strict `script-src 'none'` CSP makes any script/event-handler
+// a memo's markdown might inject inert — that, not a sanitizer, is the XSS guard.
+function escapeHtml(s: string): string {
+  return s.replace(/[&<>"]/g, (ch) =>
+    ch === "&" ? "&amp;" : ch === "<" ? "&lt;" : ch === ">" ? "&gt;" : "&quot;"
+  );
+}
+
+app.get("/p/:id", async (c) => {
+  const row = await c.env.DB.prepare(
+    "SELECT title, content FROM memos WHERE id = ? AND deleted_at IS NULL AND published_at IS NOT NULL"
+  )
+    .bind(c.req.param("id"))
+    .first<{ title: string; content: string }>();
+  if (!row) return c.text("Not found", 404);
+  const body = await marked.parse(row.content);
+  const html = `<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>${escapeHtml(row.title)}</title>
+<style>
+  :root { color-scheme: light dark; }
+  body { max-width: 44rem; margin: 0 auto; padding: 2.5rem 1.25rem 6rem;
+         font: 16px/1.7 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+         color: #1a1a1a; background: #fff; word-wrap: break-word; }
+  @media (prefers-color-scheme: dark) { body { color: #e8e8e8; background: #1a1a1a; } }
+  img { max-width: 100%; height: auto; }
+  pre { overflow-x: auto; padding: 1rem; border-radius: 6px; background: rgba(127,127,127,.12); }
+  code { background: rgba(127,127,127,.15); padding: .15em .35em; border-radius: 4px; }
+  pre code { background: none; padding: 0; }
+  blockquote { margin: 0; padding-left: 1rem; border-left: 3px solid rgba(127,127,127,.4); color: inherit; opacity: .85; }
+  a { color: #3b82f6; }
+  table { border-collapse: collapse; } th, td { border: 1px solid rgba(127,127,127,.3); padding: .4rem .6rem; }
+</style>
+</head>
+<body>${body}</body>
+</html>`;
+  return c.html(html, 200, {
+    "Content-Security-Policy":
+      "default-src 'none'; script-src 'none'; img-src 'self' data: https:; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'",
+    "X-Content-Type-Options": "nosniff",
+  });
+});
+
 // gate everything under /api except the public auth + /api/ext routes. The public
 // routes (/api/login, /api/logout, /api/ext/*, /api/passkey/auth/*) are all
 // registered before this middleware, so their handlers respond first and this
@@ -700,6 +750,30 @@ app.get("/api/memos/:id", async (c) => {
     .first();
   if (!row) return c.json({ error: "not found" }, 404);
   return c.json(row);
+});
+
+// publish / unpublish: toggle a memo's public /p/:id page. Owner-only (the /api
+// gate + user_id scope). Idempotent — re-publishing keeps the same URL.
+app.post("/api/memos/:id/publish", async (c) => {
+  const { uid } = getUser(c);
+  const id = c.req.param("id");
+  const row = await c.env.DB.prepare(
+    "SELECT id FROM memos WHERE id = ? AND deleted_at IS NULL AND user_id = ?"
+  ).bind(id, uid).first();
+  if (!row) return c.json({ error: "not found" }, 404);
+  // `published_at IS NULL` keeps re-publishing from re-stamping the time (no-op)
+  await c.env.DB.prepare("UPDATE memos SET published_at = ? WHERE id = ? AND published_at IS NULL")
+    .bind(Date.now(), id)
+    .run();
+  return c.json({ ok: true, url: `/p/${id}` });
+});
+
+app.delete("/api/memos/:id/publish", async (c) => {
+  const { uid } = getUser(c);
+  await c.env.DB.prepare("UPDATE memos SET published_at = NULL WHERE id = ? AND user_id = ?")
+    .bind(c.req.param("id"), uid)
+    .run();
+  return c.json({ ok: true });
 });
 
 app.put("/api/memos/:id", async (c) => {

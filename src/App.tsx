@@ -1610,8 +1610,11 @@ function Login({
       .then((available) => {
         if (available) return onPasskeyLogin();
       })
+      // cancelled passkey popup → put the cursor back in the id input. Deferred a
+      // frame so it runs AFTER the browser restores focus on modal close (which
+      // otherwise overrides an immediate focus()).
       .catch(() => {})
-      .finally(focusId); // cancelled passkey popup → put the cursor back in the id input
+      .finally(() => requestAnimationFrame(focusId));
   }, []);
 
   // load + render the Turnstile widget (only when a site key is configured)

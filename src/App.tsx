@@ -156,6 +156,7 @@ export default function App() {
     pv.scrollTop += centerDelta(top, target.clientHeight, pv.clientHeight);
   }
   const focusOnOpen = useRef(false); // focus the editor after the next new memo opens
+  const didInitialFocus = useRef(false); // focus the editor once when it first mounts (#143)
   const fileRef = useRef<HTMLInputElement>(null); // hidden file picker for text import
   const { notice, flash } = useToast();
   // file import (each file → its own memo), image paste (base64 embed), and .md export
@@ -288,14 +289,17 @@ export default function App() {
     return () => window.removeEventListener("hashchange", onHash);
   }, []);
 
-  // when a new memo opens, drop the cursor right after the prefilled "# "
+  // drop the cursor in the editor with the caret at end: after each new memo opens,
+  // and once when the editor first mounts — so entering the homepage (login / boot /
+  // deep-linked memo) always lands ready to type (#143). The once-flag keeps later
+  // sidebar clicks from stealing focus.
   useEffect(() => {
-    if (focusOnOpen.current && editorRef.current) {
-      focusOnOpen.current = false;
-      const el = editorRef.current;
-      el.focus();
-      el.setSelectionRange(el.value.length, el.value.length);
-    }
+    const el = editorRef.current;
+    if (!el || (!focusOnOpen.current && didInitialFocus.current)) return;
+    focusOnOpen.current = false;
+    didInitialFocus.current = true;
+    el.focus();
+    el.setSelectionRange(el.value.length, el.value.length);
   }, [currentId]);
 
   // shared post-login setup (used by both password login and passkey login)

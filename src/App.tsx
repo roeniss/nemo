@@ -444,15 +444,21 @@ export default function App() {
     if (published) {
       await api(`/memos/${id}/publish`, { method: "DELETE" });
       setPublished(false);
+      setMemos((ms) => ms.map((x) => (x.id === id ? { ...x, published_at: null } : x)));
       flash("Unpublished");
     } else {
       const r = await api(`/memos/${id}/publish`, { method: "POST" });
       if (!r.ok) return flash("Publish failed");
       setPublished(true);
-      const url = `${location.origin}/p/${id}`;
-      await navigator.clipboard.writeText(url).catch(() => {});
-      flash("Public link copied");
+      setMemos((ms) => ms.map((x) => (x.id === id ? { ...x, published_at: Date.now() } : x)));
+      await copyPublicLink();
     }
+  }
+
+  // copy the current memo's public /p/:id link to the clipboard
+  async function copyPublicLink() {
+    await navigator.clipboard.writeText(`${location.origin}/p/${currentId}`).catch(() => {});
+    flash("Public link copied");
   }
 
   // user-initiated "new memo" (toolbar button / ⌘K): unlike the boot-time
@@ -1319,6 +1325,11 @@ export default function App() {
                     onClick={() => openMemo(m.id)}
                   >
                     <span className="memo-title">{m.title || "Untitled"}</span>
+                    {m.published_at != null && (
+                      <span className="published-dot" title="Published to a public link" aria-label="Published">
+                        ●
+                      </span>
+                    )}
                     <button
                       className="del"
                       onClick={(e) => {
@@ -1466,15 +1477,28 @@ export default function App() {
               className={`publish icon-btn${published ? " active" : ""}`}
               onClick={togglePublish}
               disabled={currentId == null || currentId < 0}
-              title={published ? "Published — click to unpublish (copy link)" : "Publish this memo to a public link"}
+              title={published ? "Published — click to unpublish" : "Publish this memo to a public link"}
               aria-label={published ? "Unpublish memo" : "Publish memo"}
             >
               <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M4 12v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8" />
-                <polyline points="16 6 12 2 8 6" />
-                <line x1="12" y1="2" x2="12" y2="15" />
+                <circle cx="12" cy="12" r="10" />
+                <line x1="2" y1="12" x2="22" y2="12" />
+                <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z" />
               </svg>
             </button>
+            {published && (
+              <button
+                className="copy-link icon-btn"
+                onClick={copyPublicLink}
+                title="Copy public link"
+                aria-label="Copy public link"
+              >
+                <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M10 13a5 5 0 0 0 7 0l3-3a5 5 0 0 0-7-7l-1 1" />
+                  <path d="M14 11a5 5 0 0 0-7 0l-3 3a5 5 0 0 0 7 7l1-1" />
+                </svg>
+              </button>
+            )}
             <button
               className="download icon-btn"
               onClick={downloadMemo}

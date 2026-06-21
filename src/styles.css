@@ -267,6 +267,12 @@ input {
   overflow: hidden;
   text-overflow: ellipsis;
 }
+.published-dot {
+  color: var(--accent, #2f9e44);
+  font-size: 10px;
+  line-height: 1;
+  flex: none;
+}
 .del {
   border: none;
   background: transparent;

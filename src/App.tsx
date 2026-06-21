@@ -1589,10 +1589,13 @@ function Login({
   const idRef = useRef<HTMLInputElement>(null);
 
   // drop the cursor in the id input on mount — native autoFocus is unreliable here
-  // (and never re-fires), so focus it explicitly
-  useEffect(() => {
+  // (and never re-fires), so focus it explicitly. Re-applied once the auto passkey
+  // prompt below settles, since that popup steals focus on open and cancelling it
+  // would otherwise leave nothing focused.
+  function focusId() {
     idRef.current?.focus();
-  }, []);
+  }
+  useEffect(focusId, []);
 
   // Immediately show the passkey picker modal on mount — but only when the device
   // actually has a platform authenticator, so browsers/devices without one don't
@@ -1607,7 +1610,8 @@ function Login({
       .then((available) => {
         if (available) return onPasskeyLogin();
       })
-      .catch(() => {});
+      .catch(() => {})
+      .finally(focusId); // cancelled passkey popup → put the cursor back in the id input
   }, []);
 
   // load + render the Turnstile widget (only when a site key is configured)

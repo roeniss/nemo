@@ -82,7 +82,10 @@ afterEach(() => {
 });
 
 describe("passkey conditional UI", () => {
-  it("calls startAuthentication without useBrowserAutofill on login mount (immediate popup)", async () => {
+  it("does NOT auto-prompt on login mount even with a platform authenticator (focus stays on id)", async () => {
+    // The auto passkey prompt stole focus from the id input and couldn't reliably
+    // return it (Chrome's native dialog blurs without window events), so passkey
+    // login is manual-only now — nothing fires on mount.
     vi.mocked(startAuthentication).mockRejectedValue(
       Object.assign(new Error("NotAllowedError"), { name: "NotAllowedError" })
     );
@@ -93,19 +96,11 @@ describe("passkey conditional UI", () => {
     const { container } = render(<App />);
     await waitFor(() => expect(container.querySelector(".login")).toBeTruthy());
 
-    // Wait for the immediate passkey call to fire
-    await waitFor(() => {
-      const calls = fetchImpl.mock.calls.filter(
-        (c) => String(c[0]).includes("/passkey/auth/options")
-      );
-      expect(calls.length).toBeGreaterThan(0);
-    });
-
-    await waitFor(() => {
-      expect(vi.mocked(startAuthentication)).toHaveBeenCalledWith(
-        expect.not.objectContaining({ useBrowserAutofill: true })
-      );
-    });
+    await new Promise((r) => setTimeout(r, 20));
+    expect(vi.mocked(startAuthentication)).not.toHaveBeenCalled();
+    expect(
+      fetchImpl.mock.calls.filter((c) => String(c[0]).includes("/passkey/auth/options"))
+    ).toHaveLength(0);
   });
 
   it("does NOT auto-prompt when no platform authenticator is available", async () => {
@@ -170,7 +165,7 @@ describe("passkey conditional UI", () => {
     expect(container.querySelector(".err")).toBeFalsy();
   });
 
-  it("completes login when conditional UI succeeds (passkey available and chosen)", async () => {
+  it("completes login when the passkey button succeeds", async () => {
     vi.mocked(startAuthentication).mockResolvedValue({ id: "cred-id" } as any);
     const { fetchImpl, authed } = makeServer();
     globalThis.fetch = fetchImpl as unknown as typeof fetch;
@@ -180,7 +175,11 @@ describe("passkey conditional UI", () => {
 
     await waitFor(() => expect(container.querySelector(".login")).toBeTruthy());
 
-    // After the conditional UI flow completes, the app should be in authed state
+    const passkeyBtn = Array.from(container.querySelectorAll("button")).find(
+      (b) => b.textContent?.includes("Passkey")
+    )!;
+    passkeyBtn.click();
+
     await waitFor(() => {
       expect(authed.value).toBe(true);
     });
@@ -205,11 +204,9 @@ describe("passkey conditional UI", () => {
   });
 
   it("shows an error when passkey verify returns non-ok", async () => {
-    // conditional UI is rejected first; the manual button click then resolves
-    // startAuthentication but the verify endpoint fails → passkeyLogin throws.
-    vi.mocked(startAuthentication)
-      .mockRejectedValueOnce(Object.assign(new Error("NotAllowedError"), { name: "NotAllowedError" }))
-      .mockResolvedValueOnce({ id: "cred-id" } as any);
+    // the manual button click resolves startAuthentication but the verify endpoint
+    // fails → passkeyLogin throws → error surfaces.
+    vi.mocked(startAuthentication).mockResolvedValue({ id: "cred-id" } as any);
 
     const { fetchImpl } = makeServer({ passkeyVerifyStatus: 401 });
     globalThis.fetch = fetchImpl as unknown as typeof fetch;
@@ -217,7 +214,6 @@ describe("passkey conditional UI", () => {
     const { default: App } = await import("../src/App");
     const { container } = render(<App />);
     await waitFor(() => expect(container.querySelector(".login")).toBeTruthy());
-    await waitFor(() => expect(vi.mocked(startAuthentication)).toHaveBeenCalled());
 
     const passkeyBtn = Array.from(container.querySelectorAll("button")).find(
       (b) => b.textContent?.includes("Passkey")
@@ -230,11 +226,8 @@ describe("passkey conditional UI", () => {
   });
 
   it("passkey button still works as manual fallback", async () => {
-    // conditional UI is silently rejected (no passkeys)
-    vi.mocked(startAuthentication)
-      .mockRejectedValueOnce(Object.assign(new Error("NotAllowedError"), { name: "NotAllowedError" }))
-      // button click uses the manual flow (without useBrowserAutofill)
-      .mockResolvedValueOnce({ id: "cred-id" } as any);
+    // button click uses the manual flow (without useBrowserAutofill)
+    vi.mocked(startAuthentication).mockResolvedValue({ id: "cred-id" } as any);
 
     const { fetchImpl, authed } = makeServer();
     globalThis.fetch = fetchImpl as unknown as typeof fetch;
@@ -243,10 +236,7 @@ describe("passkey conditional UI", () => {
     const { container } = render(<App />);
     await waitFor(() => expect(container.querySelector(".login")).toBeTruthy());
 
-    // Wait for the conditional UI call to settle first
-    await waitFor(() => expect(vi.mocked(startAuthentication)).toHaveBeenCalled());
-
-    // Now click the passkey button
+    // Click the passkey button
     const passkeyBtn = Array.from(container.querySelectorAll("button")).find(
       (b) => b.textContent?.includes("Passkey")
     );

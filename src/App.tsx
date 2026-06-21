@@ -1588,39 +1588,12 @@ function Login({
   const widget = useRef<HTMLDivElement>(null);
   const idRef = useRef<HTMLInputElement>(null);
 
-  // drop the cursor in the id input — native autoFocus is unreliable here (and never
-  // re-fires), so focus it explicitly. focusId() is guarded so it never steals focus
-  // from a field the user is already in (e.g. the password box). refocusId() retries
-  // over ~300ms: Chrome's native passkey dialog (below) blurs the input WITHOUT
-  // firing window blur/focus, so the only signal it closed is the promise settling —
-  // and Chrome keeps fiddling with focus for a few frames after that, so a single
-  // focus() loses the race.
-  function focusId() {
-    const a = document.activeElement;
-    if (!a || a === document.body) idRef.current?.focus();
-  }
-  function refocusId() {
-    for (const ms of [0, 60, 150, 300]) setTimeout(focusId, ms);
-  }
+  // drop the cursor in the id input on mount — native autoFocus is unreliable here
+  // (and never re-fires), so focus it explicitly. No auto passkey prompt fights for
+  // focus anymore (the "Passkey로 로그인" button covers that path manually), so a
+  // single focus() is enough.
   useEffect(() => {
     idRef.current?.focus();
-  }, []);
-
-  // Immediately show the passkey picker modal on mount — but only when the device
-  // actually has a platform authenticator, so browsers/devices without one don't
-  // get a pointless popup. (We can't tell whether a passkey is registered for THIS
-  // site without prompting — that's a privacy boundary — so a user with an
-  // authenticator but no nemo passkey may still see it; the manual button covers
-  // the rest.) Silently ignored if the user cancels.
-  useEffect(() => {
-    const PK = window.PublicKeyCredential;
-    if (!PK?.isUserVerifyingPlatformAuthenticatorAvailable) return;
-    PK.isUserVerifyingPlatformAuthenticatorAvailable()
-      .then((available) => {
-        if (available) return onPasskeyLogin();
-      })
-      .catch(() => {})
-      .finally(refocusId); // dialog closed (cancelled/failed) → put the cursor back
   }, []);
 
   // load + render the Turnstile widget (only when a site key is configured)
